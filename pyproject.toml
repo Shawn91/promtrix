@@ -1,0 +1,16 @@
+[tool.poetry]
+name = "promtrix"
+version = "0.1.0"
+description = "An intuitive GUI for evaluating and optimizing prompts and LLMs"
+authors = ["Shawn <vuyuxl199199@gmail.com>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+nicegui = "^2.5.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
