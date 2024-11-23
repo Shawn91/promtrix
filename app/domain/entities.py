@@ -1,22 +1,32 @@
 import uuid
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from jinja2 import Template
+from pydantic import BaseModel, Field, ConfigDict
 
 
 class PromptTemplate(BaseModel):
     """
     PromptTemplate represents a prompt template that may contain placeholders for variables.
-    A plaint text prompt template without any placeholders is also supported.
+    A plaint text prompt without any placeholders is also supported.
     """
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
-    text: str
-    description: str
+    template: Template
+    description: str | None = Field(default=None)
+
+    @classmethod
+    def from_string(cls, text: str, description: str | None = None):
+        """
+        Creates a PromptTemplate from a string.
+        """
+        return cls(template=Template(text), description=description)
 
 
-class Target(BaseModel):
+class ServiceTarget(BaseModel):
     """
-    Target represents a llm model or a LLM-backed service
+    ServiceTarget represents a llm model or a LLM-backed service
     """
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str
@@ -27,7 +37,9 @@ class Target(BaseModel):
 
 class Task(BaseModel):
     """
-    Represents a specific problem that needs to be solved
+    Represents a specific problem that needs to be solved.
+    To solve this problem, various similar prompts may be used, various models may be tested,
+        and the responses are evaluated on datasets to optimize the prompts and to find the best llm model or service.
     """
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     name: str
@@ -36,14 +48,14 @@ class Task(BaseModel):
 
 class Execution(BaseModel):
     """
-    Represents a specific execution of a task on a prompt for a target
+    Represents a prompt being sent to a target
     If a dataset is used for testing or evaluating the model or prompt, each data point should be represented
         as a separate Execution object.
     """
     id: uuid.UUID = Field(default_factory=uuid.uuid4)
     prompt_template: PromptTemplate = Field(description='The original prompt template that was used for this execution')
     final_prompt: str = Field(description='The prompt that was used for this execution, after any modifications')
-    target: Target
+    target: ServiceTarget
     duration: int = Field(description='The duration of the execution in milliseconds')
     cost: float | None = Field(default=None,
                                description='The cost of the execution. 0 if free. None if unknown or not applicable.')
@@ -55,7 +67,7 @@ class Execution(BaseModel):
         return hash(self.id)
 
 
-class GroupedExecution(BaseModel):
+class ExecutionGroup(BaseModel):
     """
     Represents a group of Executions that were executed together.
     Typically, this will be used for evaluating a model or prompt on a dataset, or evaluating various similar
@@ -85,7 +97,7 @@ class Evaluation(BaseModel):
                                description='The cost of the evaluation. 0 if free. None if unknown or not applicable.')
 
 
-class GroupedEvaluation(BaseModel):
+class EvaluationGroup(BaseModel):
     """
     Represents a group of Evaluation objects that were performed together.
     Note: given a dataset, each llm response could be evaluated using different metrics or methods creating multiple
