@@ -4,7 +4,7 @@ from app.domain.entities import PromptTemplate
 from app.presentation.base import Component
 
 
-class PromptTemplatesCard(Component):
+class PromptTemplatesComponent(Component):
     def __init__(self):
         self.card = ui.card()
         self.inputs_container: ui.element | None = None
@@ -16,11 +16,11 @@ class PromptTemplatesCard(Component):
                 ui.textarea().props('outlined')
                 ui.button(icon='remove', on_click=lambda: row.delete()).props('size=sm round')
 
-    def collect_prompt_templates(self) -> list[PromptTemplate]:
+    def collect_data(self) -> list[PromptTemplate]:
         prompt_templates = []
-        for textarea in self.inputs_container.descendants():
-            if isinstance(textarea, ui.textarea):
-                prompt_templates.append(PromptTemplate.from_string(text=textarea.value))
+        for element in self.inputs_container.descendants():
+            if isinstance(element, ui.textarea):
+                prompt_templates.append(PromptTemplate.from_string(text=element.value))
         return prompt_templates
 
     def render(self):
@@ -34,4 +34,4 @@ class PromptTemplatesCard(Component):
 
             with ui.card_actions().classes('w-full justify-end'):
                 ui.button(text='Cancel')
-                ui.button(text='Save')
+                ui.button(text='Save', on_click=self.collect_data)
