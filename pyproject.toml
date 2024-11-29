@@ -14,6 +14,7 @@ jinja2 = "^3.1.4"
 litellm = "^1.52.15"
 sqlmodel = "^0.0.22"
 datasets = "^3.1.0"
+python-dotenv = "^1.0.1"
 
 
 [build-system]
