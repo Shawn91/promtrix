@@ -1,7 +1,7 @@
 import asyncio
 from datetime import datetime
 from itertools import product
-from typing import Iterator, Coroutine
+from typing import Iterator
 
 import litellm
 from datasets import (
@@ -19,8 +19,9 @@ from app.entities_models.entities import (
     ExecutionEntity,
     ExecutionGroupEntity,
     LLMParametersEntity,
+    ExpectedResponseEntity,
 )
-from app.shared.utils import PROJECT_ROOT
+from app.shared.utils import PROJECT_ROOT, asyncio_gather
 
 
 def load_dataset(path, name) -> DatasetEntity:
@@ -34,7 +35,6 @@ def load_dataset(path, name) -> DatasetEntity:
     ]
     return DatasetEntity(
         name=raw_dataset.info.config_name if raw_dataset.info.config_name else raw_dataset.info.dataset_name,
-        parent_name=None if not raw_dataset.info.config_name else raw_dataset.info.dataset_name,
         size=raw_dataset.info.size_in_bytes,
         splits=splits,
         version=raw_dataset.info.version.version_str,
@@ -60,22 +60,15 @@ def generate_prompt(
     if dataset is not None:
         template_variables = iter(dataset)
     for prompt_template, variables in product(prompt_templates, template_variables):
-        yield prompt_template.generate_prompt(user=variables["input"])
+        expected_response = None
+        if variables.get("output"):
+            expected_response = ExpectedResponseEntity(content=variables["output"])
+        yield prompt_template.generate_prompt(user=variables, expected_response=expected_response)
 
 
-async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> Coroutine[None, None, ExecutionEntity]:
-    messages = []
-    if prompt.system:
-        messages.append({"role": "system", "content": prompt.system})
-    messages.append({"role": "user", "content": prompt.user})
-    start_time = datetime.now()
-    response = await litellm.acompletion(
-        model="openrouter/deepseek/deepseek-chat",
-        messages=messages,
-        stream=False,
-        api_key=llm_params.api_key,
-    )
-    duration = (datetime.now() - start_time).microseconds
+def create_execution_entity(
+    prompt: PromptEntity, duration: int, response: litellm.ModelResponse, llm_params: LLMParametersEntity | None = None
+) -> ExecutionEntity:
     reponse_entities = [
         LLMResponseEntity(
             content=choice.message.content,
@@ -85,7 +78,6 @@ async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> 
         )
         for choice in response.choices
     ]
-    prompt.token_count = response.usage.prompt_tokens
     try:
         cost = completion_cost(completion_response=response)
     except litellm.exceptions.NotFoundError:
@@ -101,21 +93,52 @@ async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> 
     )
 
 
+async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> ExecutionEntity:
+    messages = []
+    if prompt.system:
+        messages.append({"role": "system", "content": prompt.system})
+    messages.append({"role": "user", "content": prompt.user})
+    start_time = datetime.now()
+    response = await litellm.acompletion(
+        model="openrouter/deepseek/deepseek-chat",
+        messages=messages,
+        stream=False,
+        api_key=llm_params.api_key,
+    )
+    duration = (datetime.now() - start_time).microseconds
+    prompt.token_count = response.usage.prompt_tokens
+    return create_execution_entity(prompt=prompt, duration=duration, llm_params=llm_params, response=response)
+
+
 async def execute_task(
     llm_params: LLMParametersEntity,
     prompt_templates: list[PromptTemplateEntity] | None = None,
     dataset: DatasetEntity | None = None,
     batch_size: int = 5,
-) -> Coroutine[None, None, ExecutionGroupEntity]:
+) -> ExecutionGroupEntity:
     llm_requests = []
     executions = []
     start_time = datetime.now()
     for prompts in generate_prompt(prompt_templates=prompt_templates, dataset=dataset):
         llm_requests.append(send_to_llm(prompts, llm_params=llm_params))
         if len(llm_requests) == batch_size:
-            executions.extend(await asyncio.gather(*llm_requests))
+            executions.extend(await asyncio_gather(*llm_requests))
             llm_requests = []
     if llm_requests:
-        executions.extend(await asyncio.gather(*llm_requests))
+        executions.extend(await asyncio_gather(*llm_requests))
     duration = (datetime.now() - start_time).microseconds
     return ExecutionGroupEntity(executions=executions, duration=duration)
+
+
+if __name__ == "__main__":
+    from app.config import Config
+
+    dataset = load_dataset(path="lukaemon/bbh", name="boolean_expressions")
+    # print(
+    #     asyncio.run(
+    #         execute_task(
+    #             llm_params=LLMParametersEntity(api_key=Config.OPENROUTER_API_KEY),
+    #             dataset=dataset,
+    #         )
+    #     )
+    # )

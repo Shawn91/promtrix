@@ -12,12 +12,15 @@ Entities should be converted to Models before being passed to external systems.
 Data retrieved from external systems should be Models and thenconverted to Entities 
 before being used in the application.
 """
-from typing import Optional, Iterator
+from functools import cached_property
+from typing import Optional, Iterator, Any, Literal, Union
 
 import datasets as HFDatasets
 from jinja2 import Template
 from pydantic import ConfigDict
-from sqlmodel import Field, SQLModel
+from pydantic.main import IncEx
+from sqlmodel import Field
+from typing_extensions import override
 
 from app.entities_models.base import (
     PromptTemplate,
@@ -27,26 +30,38 @@ from app.entities_models.base import (
     LLMResponse,
     Execution,
     ExecutionGroup,
+    MySQLModel,
+    Evaluation,
 )
 
 
 class PromptTemplateEntity(PromptTemplate):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    user: Template = Field(description="template for user prompt")
-    system: Template | None = None  # Store as string, convert to jinja2 Template when needed
     is_placeholder: bool = False  # True if no template is actually required and a template is created for convenience
+
+    @cached_property
+    def user_template(self):
+        return Template(self.user)
+
+    @cached_property
+    def system_template(self):
+        if self.system is None:
+            return None
+        return Template(self.system)
 
     @classmethod
     def create_empty(cls) -> "PromptTemplateEntity":
-        template = cls(user=Template("{{input}}"))
-        template.is_placeholder = True
+        template = cls(user="{{input}}", is_placeholder=True)
         return template
 
-    def generate_prompt(self, user: str, system: str | None = None) -> "PromptEntity":
-        prompt_entity = PromptEntity(user=self.user.render(input=user))
+    def generate_prompt(
+        self,
+        user: dict[str, str],
+        system: dict[str, str] | None = None,
+        expected_response: Optional["ExpectedResponseEntity"] = None,
+    ) -> "PromptEntity":
+        prompt_entity = PromptEntity(user=self.user_template.render(**user), expected_response=expected_response)
         if system is not None:
-            prompt_entity.system = self.system.render(system)
+            prompt_entity.system = self.system_template.render(**system)
         if not self.is_placeholder:
             prompt_entity.template = self
         return prompt_entity
@@ -54,13 +69,18 @@ class PromptTemplateEntity(PromptTemplate):
 
 class PromptEntity(Prompt):
     template: PromptTemplateEntity | None = None
+    expected_response: Optional["ExpectedResponseEntity"] = None
 
 
 class LLMResponseEntity(LLMResponse):
-    pass
+    evaluation: Optional["EvaluationEntity"] = None
 
 
-class LLMParametersEntity(SQLModel):
+class EvaluationEntity(Evaluation):
+    steps: list | None = Field(default=None, description="The steps taken to evaluate the response")
+
+
+class LLMParametersEntity(MySQLModel):
     """
     Represents the parameters used for one call to an llm service
     """
@@ -78,13 +98,26 @@ class LLMParametersEntity(SQLModel):
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
 
 
+class ExpectedResponseEntity(MySQLModel):
+    """
+    Represents the expected response for a prompt
+    """
+
+    content: str = Field(description="The expected response text")
+
+
 class ExecutionEntity(Execution):
     """
     Represents a prompt being sent to a llm_service
     """
 
     prompt: PromptEntity = Field(description="The prompt being sent to the llm service")
-    llm_parameters: LLMParametersEntity = Field(description="The parameters used for the llm service call")
+    llm_parameters: LLMParametersEntity | None = Field(
+        default=None, description="The parameters used for the llm service call"
+    )
+    responses: list[LLMResponseEntity] = Field(
+        default_factory=list, description="The responses received from the llm service"
+    )
 
 
 class ExecutionGroupEntity(ExecutionGroup):
@@ -98,8 +131,8 @@ class DatasetSplitEntity(DatasetSplit):
 class DatasetEntity(Dataset):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    parent: Optional["DatasetEntity"] = None
-    subsets: list["DatasetEntity"] | None = None
+    parent: Union[None, "DatasetEntity"] = None
+    subsets: Union[None, list["DatasetEntity"]] = None
     raw_dataset: HFDatasets.Dataset | None = None
     splits: list[DatasetSplitEntity] | None = None
 
@@ -110,34 +143,3 @@ class DatasetEntity(Dataset):
         if not self.raw_dataset:
             raise ValueError("No raw dataset available to iterate over.")
         return iter(self.raw_dataset)
-
-    def iter_batch(self, size: int) -> Iterator["DatasetEntity"]:
-        """
-        Create an iterator that yields batches of data samples from the current dataset entity.
-        Each batch will be a new DatasetEntity with the specified size.
-
-        Args:
-            size (int): The size of each batch to return.
-
-        Yields:
-            DatasetEntity: A new DatasetEntity representing a batch.
-        """
-        if not self.raw_dataset:
-            raise ValueError("No raw dataset available to create batches.")
-
-        # Assume raw_dataset can be sliced or iterated. Adjust as necessary.
-        total_size = len(self.raw_dataset)  # Get total number of samples
-        for start in range(0, total_size, size):
-            end = min(start + size, total_size)
-            batch_data = self.raw_dataset[start:end]  # Slice the dataset into the batch
-
-            # Create a new DatasetEntity for the batch
-            batch_entity = DatasetEntity(
-                raw_dataset=batch_data,
-                name=f"{self.name}_batch_{start}_{end}",
-                version=self.version,
-                description=f"A batch of {size} samples from {self.name}",
-                created_at=self.created_at,
-                parent=self,
-            )
-            yield batch_entity

@@ -162,3 +162,5 @@ cython_debug/
 .idea
 .aider*
 datasets/
+experiments/bbh/raw_llm_responses
+experiments/bbh/evaluations.json

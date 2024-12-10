@@ -16,15 +16,13 @@ from uuid import UUID
 
 from sqlmodel import Field, Relationship
 
-from app.entities_models.base import PromptTemplate, Prompt, Dataset, LLMResponse, Execution
+from app.entities_models.base import PromptTemplate, Prompt, Dataset, LLMResponse, Execution, DatasetSplit, Evaluation
 
 
 class PromptTemplateModel(PromptTemplate, table=True):
     __tablename__ = "prompt_template"
 
     id: UUID | None = Field(default=None, primary_key=True)
-    user: str | None = Field(default=None, description="template for user prompt")
-    system: str | None = None  # Store as string, convert to jinja2 Template when needed
 
     prompts: list["PromptModel"] = Relationship(back_populates="template")
 
@@ -42,16 +40,16 @@ class PromptModel(Prompt, table=True):
 class LLMResponseModel(LLMResponse, table=True):
     __tablename__ = "llm_response"
 
-    id: UUID | None = Field(default=None, primary_key=True)
     execution_id: UUID = Field(foreign_key="execution.id")
+    evaluation_id: UUID | None = Field(default=None, foreign_key="evaluation.id")
 
     execution: Execution = Relationship(back_populates="llm_responses")
+    evaluation: Evaluation = Relationship(back_populates="llm_response")
 
 
 class ExecutionModel(Execution, table=True):
     __tablename__ = "execution"
 
-    id: UUID | None = Field(default=None, primary_key=True)
     prompt_id: UUID | None = Field(default=None, foreign_key="prompt.id")
     group_id: UUID | None = Field(default=None, foreign_key="execution_group.id")
 
@@ -78,14 +76,19 @@ class ExecutionModel(Execution, table=True):
 
 class ExecutionGroupModel(Execution, table=True):
     __tablename__ = "execution_group"
-    id: UUID | None = Field(default=None, primary_key=True)
     executions: list["ExecutionModel"] = Relationship(back_populates="group")
 
 
-class DatasetSplitModel(Dataset, table=True):
+class EvaluationModel(Evaluation, table=True):
+    __tablename__ = "evaluation"
+
+    llm_response: LLMResponseModel = Relationship(back_populates="evaluation")
+    # evaluation_group: Optional["EvaluationGroup"] = Relationship(back_populates="evaluations")
+
+
+class DatasetSplitModel(DatasetSplit, table=True):
     __tablename__ = "dataset_split"
 
-    id: UUID | None = Field(default=None, primary_key=True)
     dataset_id: UUID = Field(foreign_key="dataset.id")
 
     dataset: Dataset = Relationship(back_populates="splits")
@@ -94,7 +97,6 @@ class DatasetSplitModel(Dataset, table=True):
 class DatasetModel(Dataset, table=True):
     __tablename__ = "dataset"
 
-    id: UUID | None = Field(default=None, primary_key=True)
     parent_id: UUID | None = Field(default=None, foreign_key="dataset.id")
 
     # Define the relationship to child datasets

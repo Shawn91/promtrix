@@ -9,13 +9,16 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.10"
 nicegui = "^2.5.0"
-pydantic = "^2.10.1"
+pydantic = "^2.10.3"
 jinja2 = "^3.1.4"
 litellm = "^1.52.15"
 sqlmodel = "^0.0.22"
 datasets = "^3.1.0"
 python-dotenv = "^1.0.1"
 
+
+[tool.poetry.group.dev.dependencies]
+tqdm = "^4.67.1"
 
 [build-system]
 requires = ["poetry-core"]
