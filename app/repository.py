@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import Config
+from app.entities_models.entities import LLMServiceEntity  # noqa: F401
 from app.entities_models.db_models import *
 from app.shared.utils import logger
 
