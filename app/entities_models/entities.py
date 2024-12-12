@@ -9,18 +9,31 @@ but do not interact with external systems like databases or APIs.
 
 Entities should be converted to Models before being passed to external systems.
 
-Data retrieved from external systems should be Models and thenconverted to Entities 
+Data retrieved from external systems should be Models and then converted to Entities
 before being used in the application.
 """
+import json
 from functools import cached_property
-from typing import Optional, Iterator, Any, Literal, Union
+from typing import Optional, Iterator, Any, Union, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.entities_models.db_models import (
+        APIKeyModel,
+        LLMServiceModel,
+        PromptTemplateModel,
+        PromptModel,
+        LLMResponseModel,
+        EvaluationModel,
+        ExecutionModel,
+        DatasetSplitModel,
+        DatasetModel,
+        ExecutionGroupModel,
+    )
 
 import datasets as HFDatasets
 from jinja2 import Template
 from pydantic import ConfigDict
-from pydantic.main import IncEx
-from sqlmodel import Field
-from typing_extensions import override
+from sqlmodel import Field, SQLModel
 
 from app.entities_models.base import (
     PromptTemplate,
@@ -32,10 +45,22 @@ from app.entities_models.base import (
     ExecutionGroup,
     MySQLModel,
     Evaluation,
+    APIKey,
+    LLMService,
 )
 
 
-class PromptTemplateEntity(PromptTemplate):
+class ToModelEntity(SQLModel):
+    @property
+    def model(self):
+        raise NotImplementedError()
+
+    def to_model(self):
+        """Base conversion method from entity to model"""
+        return self.model(**self.model_dump(exclude_unset=True))
+
+
+class PromptTemplateEntity(PromptTemplate, ToModelEntity):
     is_placeholder: bool = False  # True if no template is actually required and a template is created for convenience
 
     @cached_property
@@ -53,6 +78,16 @@ class PromptTemplateEntity(PromptTemplate):
         template = cls(user="{{input}}", is_placeholder=True)
         return template
 
+    @property
+    def model(self) -> type["PromptTemplateModel"]:
+        from app.entities_models.db_models import PromptTemplateModel
+
+        return PromptTemplateModel
+
+    def to_model(self) -> "PromptTemplateModel":
+        data = self.model_dump(exclude={"prompts"})
+        return self.model(**data)
+
     def generate_prompt(
         self,
         user: dict[str, str],
@@ -67,17 +102,47 @@ class PromptTemplateEntity(PromptTemplate):
         return prompt_entity
 
 
-class PromptEntity(Prompt):
+class PromptEntity(Prompt, ToModelEntity):
     template: PromptTemplateEntity | None = None
     expected_response: Optional["ExpectedResponseEntity"] = None
 
+    @property
+    def model(self) -> type["PromptModel"]:
+        from app.entities_models.db_models import PromptModel
 
-class LLMResponseEntity(LLMResponse):
+        return PromptModel
+
+    def to_model(self) -> "PromptModel":
+        data = self.model_dump(exclude={"template", "executions"})
+        return self.model(**data)
+
+
+class LLMResponseEntity(LLMResponse, ToModelEntity):
     evaluation: Optional["EvaluationEntity"] = None
 
+    @property
+    def model(self) -> type["LLMResponseModel"]:
+        from app.entities_models.db_models import LLMResponseModel
 
-class EvaluationEntity(Evaluation):
+        return LLMResponseModel
+
+    def to_model(self) -> "LLMResponseModel":
+        data = self.model_dump(exclude={"evaluation"})
+        return self.model(**data)
+
+
+class EvaluationEntity(Evaluation, ToModelEntity):
     steps: list | None = Field(default=None, description="The steps taken to evaluate the response")
+
+    @property
+    def model(self) -> type["EvaluationModel"]:
+        from app.entities_models.db_models import EvaluationModel
+
+        return EvaluationModel
+
+    def to_model(self) -> "EvaluationModel":
+        data = self.model_dump(exclude={"steps"})
+        return self.model(**data)
 
 
 class LLMParametersEntity(MySQLModel):
@@ -90,11 +155,17 @@ class LLMParametersEntity(MySQLModel):
     max_completion_tokens: Optional[int] = Field(default=None, description="The maximum number of tokens to generate")
     top_k: Optional[int] = Field(default=None, description="The number of top-k tokens to keep")
     top_p: Optional[float] = Field(default=None, description="The cumulative probability threshold")
+    min_p: Optional[float] = Field(default=None, description="The minimum probability for a token to be considered")
+    top_a: Optional[float] = Field(
+        default=None,
+        description="Consider only the top tokens with 'sufficiently high' probabilities based on the probability of the most likely token",
+    )
     stop: Optional[str] = Field(default=None, description="The stop tokens for the generation")
     n: Optional[int] = Field(default=None, description="The number of responses to generate")
     logprobs: Optional[int] = Field(default=None, description="The number of logprobs to return")
     presence_penalty: Optional[float] = Field(default=None, description="The presence penalty")
     frequency_penalty: Optional[float] = Field(default=None, description="The frequency penalty")
+    repitition_penalty: Optional[float] = Field(default=None, description="The repitition penalty")
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
 
 
@@ -106,7 +177,7 @@ class ExpectedResponseEntity(MySQLModel):
     content: str = Field(description="The expected response text")
 
 
-class ExecutionEntity(Execution):
+class ExecutionEntity(Execution, ToModelEntity):
     """
     Represents a prompt being sent to a llm_service
     """
@@ -119,16 +190,46 @@ class ExecutionEntity(Execution):
         default_factory=list, description="The responses received from the llm service"
     )
 
+    @property
+    def model(self) -> type["ExecutionModel"]:
+        from app.entities_models.db_models import ExecutionModel
 
-class ExecutionGroupEntity(ExecutionGroup):
+        return ExecutionModel
+
+    def to_model(self) -> "ExecutionModel":
+        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses"})
+        if self.llm_parameters:
+            data.update(self.llm_parameters.model_dump())
+        return self.model(**data)
+
+
+class ExecutionGroupEntity(ExecutionGroup, ToModelEntity):
     executions: list[ExecutionEntity]
 
+    @property
+    def model(self) -> type["ExecutionGroupModel"]:
+        from app.entities_models.db_models import ExecutionGroupModel
 
-class DatasetSplitEntity(DatasetSplit):
-    pass
+        return ExecutionGroupModel
+
+    def to_model(self) -> "ExecutionGroupModel":
+        data = self.model_dump(exclude={"executions"})
+        return self.model(**data)
 
 
-class DatasetEntity(Dataset):
+class DatasetSplitEntity(DatasetSplit, ToModelEntity):
+    @property
+    def model(self) -> type["DatasetSplitModel"]:
+        from app.entities_models.db_models import DatasetSplitModel
+
+        return DatasetSplitModel
+
+    def to_model(self) -> "DatasetSplitModel":
+        data = self.model_dump()
+        return self.model(**data)
+
+
+class DatasetEntity(Dataset, ToModelEntity):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     parent: Union[None, "DatasetEntity"] = None
@@ -143,3 +244,44 @@ class DatasetEntity(Dataset):
         if not self.raw_dataset:
             raise ValueError("No raw dataset available to iterate over.")
         return iter(self.raw_dataset)
+
+    @property
+    def model(self) -> type["DatasetModel"]:
+        from app.entities_models.db_models import DatasetModel
+
+        return DatasetModel
+
+    def to_model(self) -> "DatasetModel":
+        data = self.model_dump(exclude={"parent", "subsets", "raw_dataset", "splits"})
+        return self.model(**data)
+
+
+class APIKeyEntity(APIKey, ToModelEntity):
+    service: Optional["LLMServiceEntity"]
+
+    @property
+    def model(self):
+        from app.entities_models.db_models import APIKeyModel
+
+        return APIKeyModel
+
+    def to_model(self) -> "APIKeyModel":
+        data = self.model_dump(exclude={"service"})
+        return self.model(**data)
+
+
+class LLMServiceEntity(LLMService):
+    api_keys: list[APIKeyEntity] | None = None
+    custom_config: dict[str, Any] | None = None
+
+    @property
+    def model(self):
+        from app.entities_models.db_models import LLMServiceModel
+
+        return LLMServiceModel
+
+    def to_model(self) -> "LLMServiceModel":
+        data = self.model_dump(exclude={"api_keys", "custom_config"})
+        if self.custom_config:
+            data["custom_config"] = json.dumps(self.custom_config)
+        return self.model(**data)

@@ -43,25 +43,46 @@ class Prompt(MySQLModel):
     token_count: Optional[int] = Field(default=None, description="The number of tokens in the prompt")
 
 
-# class LLMService(MySQLModel):
-#     """
-#     LLMService represents a llm model or a LLM-backed service
-#     """
-#
-#     id: uuid.UUID = Field(default_factory=uuid.uuid4, primary_key=True)
-#     model: str
-#     model_provider: Optional[str] = Field(default=None, description="The provider of the llm model. E.g. OpenAI, etc")
-#     service_provider: Optional[str] = Field(
-#         default=None,
-#         description="The provider of the llm service. E.g. OpenRouter, etc",
-#     )
-#     model_version: Optional[str] = Field(default=None, description="The version of the llm model")
-#     api_base: str
-#     description: Optional[str] = None
-#     # todo: add keys field to store the keys required to access the service
-#     # keys: Optional[str] = Field(default=None, description="The keys required to access the service")
-#
-#     executions: List["Execution"] = Relationship(back_populates="llm_service")
+class APIKey(MySQLModel):
+    """
+    Represents an API key that can be used to authenticate requests to the API.
+    """
+
+    key: str = Field(primary_key=True)
+    provider: str | None = Field(default=None, description="The provider of the API key")
+    description: Optional[str] = None
+    created_at: datetime = Field(
+        default_factory=datetime.now, description="The date and time when the API key was created"
+    )
+    expires_at: Optional[datetime] = Field(default=None, description="The date and time when the API key expires")
+    active: bool = True
+
+
+class LLMService(MySQLModel):
+    """
+    LLMService represents a llm model or a LLM-backed service
+    """
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    model: str
+    model_provider: Optional[str] = Field(default=None, description="The provider of the llm model. E.g. OpenAI, etc")
+    service_provider: Optional[str] = Field(
+        default=None,
+        description="The provider of the llm service. E.g. Amazon, Fireworks, etc",
+    )
+    service_gateway: Optional[str] = Field(
+        default=None,
+        description="The gateway used to access the llm service. E.g. OpenRouter, etc",
+    )
+    model_version: Optional[str] = Field(default=None, description="The version of the llm model")
+    api_endpoint: str = Field(
+        description="Currently, litellm is used for service interaction so this should be used for the model "
+        "parameter of the 'completion' function of litellm, instead of the actual API endpoint."
+    )
+    quantization: str | None = Field(default=None, description="The quantization used for the llm model")
+    description: Optional[str] = None
+
+
 #
 #
 # class Task(MySQLModel):
