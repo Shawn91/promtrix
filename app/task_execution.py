@@ -1,4 +1,3 @@
-import asyncio
 from datetime import datetime
 from itertools import product
 from typing import Iterator
@@ -10,6 +9,7 @@ from datasets import (
 )
 from litellm import completion_cost
 
+from app.config import PROJECT_ROOT
 from app.entities_models.entities import (
     DatasetEntity,
     DatasetSplitEntity,
@@ -21,7 +21,7 @@ from app.entities_models.entities import (
     LLMParametersEntity,
     ExpectedResponseEntity,
 )
-from app.shared.utils import PROJECT_ROOT, asyncio_gather
+from app.shared.utils import asyncio_gather
 
 
 def load_dataset(path, name) -> DatasetEntity:
@@ -131,8 +131,6 @@ async def execute_task(
 
 
 if __name__ == "__main__":
-    from app.config import Config
-
     dataset = load_dataset(path="lukaemon/bbh", name="boolean_expressions")
     # print(
     #     asyncio.run(

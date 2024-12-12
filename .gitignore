@@ -164,3 +164,4 @@ cython_debug/
 datasets/
 experiments/bbh/raw_llm_responses
 experiments/bbh/evaluations.json
+experiments/database.sqlite

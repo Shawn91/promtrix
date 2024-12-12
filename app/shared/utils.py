@@ -1,8 +1,6 @@
 import asyncio
-from pathlib import Path
-from typing import Iterable, TypeVar, Union, Iterator, Tuple, Awaitable
-
-PROJECT_ROOT = Path(__file__).parent.parent.parent
+import logging
+from typing import Iterable, TypeVar, Union, Iterator, Tuple, Awaitable, Optional
 
 T = TypeVar("T")
 
@@ -50,3 +48,38 @@ async def asyncio_gather(*tasks: Awaitable[T], return_exceptions: bool = False) 
         return await tqdm_asyncio.gather(*tasks)
     except ImportError:
         return await asyncio.gather(*tasks, return_exceptions=return_exceptions)
+
+
+class LoggerConfig:
+    _instance: Optional["LoggerConfig"] = None
+    _logger: Optional[logging.Logger] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if self._logger is None:
+            # Create logger
+            self._logger = logging.getLogger("Promtrix")
+            self._logger.setLevel(logging.INFO)
+
+            # Remove existing handlers to avoid duplicates
+            if self._logger.handlers:
+                self._logger.handlers.clear()
+
+            # Create formatter
+            formatter = logging.Formatter("[%(asctime)s] %(levelname)s [%(name)s:%(lineno)d] %(message)s")
+
+            # Console handler only
+            console_handler = logging.StreamHandler()
+            console_handler.setFormatter(formatter)
+            self._logger.addHandler(console_handler)
+
+    @property
+    def logger(self) -> logging.Logger:
+        return self._logger
+
+
+logger = LoggerConfig().logger

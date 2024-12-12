@@ -1,4 +1,3 @@
-import asyncio
 import json
 
 import litellm
@@ -9,10 +8,10 @@ from datasets import (
 from litellm.types.utils import ModelResponse
 from nicegui import ui
 
-from app.config import Config
+from app.config import Config, PROJECT_ROOT
 from app.entities_models.entities import PromptEntity, ExecutionGroupEntity, ExpectedResponseEntity
-from app.evaluate import evaluate_group_with_llm, evaluate_group_by_llm
-from app.shared.utils import PROJECT_ROOT, asyncio_gather
+from app.evaluate import evaluate_group_by_llm
+from app.shared.utils import asyncio_gather
 from app.task_execution import create_execution_entity
 
 # List of all subdatasets

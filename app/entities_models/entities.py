@@ -145,7 +145,7 @@ class EvaluationEntity(Evaluation, ToModelEntity):
         return self.model(**data)
 
 
-class LLMParametersEntity(MySQLModel):
+class LLMParametersEntity(MySQLModel, table=False):
     """
     Represents the parameters used for one call to an llm service
     """
@@ -169,7 +169,7 @@ class LLMParametersEntity(MySQLModel):
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
 
 
-class ExpectedResponseEntity(MySQLModel):
+class ExpectedResponseEntity(MySQLModel, table=False):
     """
     Represents the expected response for a prompt
     """

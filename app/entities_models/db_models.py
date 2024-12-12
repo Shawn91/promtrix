@@ -42,6 +42,7 @@ from app.entities_models.base import (
     Evaluation,
     LLMService,
     APIKey,
+    ExecutionGroup,
 )
 
 
@@ -58,7 +59,7 @@ class ToEntityModel(SQLModel):
 class PromptTemplateModel(PromptTemplate, ToEntityModel, table=True):
     __tablename__ = "prompt_template"
 
-    id: UUID | None = Field(default=None, primary_key=True)
+    id: Optional[UUID] = Field(default=None, primary_key=True)
 
     prompts: list["PromptModel"] = Relationship(back_populates="template")
 
@@ -122,8 +123,8 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
 
     prompt_id: UUID | None = Field(default=None, foreign_key="prompt.id")
     group_id: UUID | None = Field(default=None, foreign_key="execution_group.id")
-    llm_service_id: UUID = Field(foreign_key="llmservice.id")
-    api_key_id: str = Field(description="The API key used to access the llm service")
+    llm_service_id: UUID = Field(foreign_key="llm_service.id")
+    api_key_id: str = Field(foreign_key="api_key.key", description="The API key used to access the llm service")
 
     # llm parameters
     temperature: Optional[float] = Field(default=None, description="The temperature used for sampling")
@@ -166,7 +167,7 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
         return self.entity(**data)
 
 
-class ExecutionGroupModel(Execution, ToEntityModel, table=True):
+class ExecutionGroupModel(ExecutionGroup, ToEntityModel, table=True):
     __tablename__ = "execution_group"
     executions: list["ExecutionModel"] = Relationship(back_populates="group")
 
@@ -206,7 +207,7 @@ class DatasetSplitModel(DatasetSplit, ToEntityModel, table=True):
 
     dataset_id: UUID = Field(foreign_key="dataset.id")
 
-    dataset: Dataset = Relationship(back_populates="splits")
+    dataset: "DatasetModel" = Relationship(back_populates="splits")
 
     @property
     def entity(self):
@@ -225,10 +226,12 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
     parent_id: UUID | None = Field(default=None, foreign_key="dataset.id")
 
     # Define the relationship to child datasets
-    subsets: list["DatasetModel"] = Relationship(back_populates="parent", sa_relationship_kwargs={"remote_side": [id]})
+    subsets: list["DatasetModel"] = Relationship(
+        back_populates="parent",
+    )
     # Define the relationship to parent dataset
     parent: Optional["DatasetModel"] = Relationship(
-        back_populates="subsets", sa_relationship_kwargs={"remote_side": [parent_id]}
+        back_populates="subsets", sa_relationship_kwargs={"remote_side": "[DatasetModel.id]"}
     )
     splits: list["DatasetSplitModel"] = Relationship(back_populates="dataset")
 
@@ -249,7 +252,7 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
         return self.entity(**data)
 
 
-class APIKeyModel(APIKey, table=True):
+class APIKeyModel(APIKey, ToEntityModel, table=True):
     __tablename__ = "api_key"
     service_id: UUID = Field(foreign_key="llm_service.id")
 
@@ -267,11 +270,13 @@ class APIKeyModel(APIKey, table=True):
         return self.entity(**data)
 
 
-class LLMServiceModel(LLMService, table=True):
+class LLMServiceModel(LLMService, ToEntityModel, table=True):
     __tablename__ = "llm_service"
-    __table_args__ = (Index("idx_unique_model_version_quant", "model", "model_version", "quantization", unique=True),)
+    __table_args__ = (Index("idx_unique_model_version_quant", "llm", "llm_version", "quantization", unique=True),)
 
-    custom_config: str = Field(default=None, description="Custom configuration for the LLM service in JSON format")
+    custom_config: Optional[str] = Field(
+        default=None, description="Custom configuration for the LLM service in JSON format"
+    )
 
     api_keys: list["APIKeyModel"] = Relationship(back_populates="service")
     executions: list["ExecutionModel"] = Relationship(back_populates="llm_service")
