@@ -63,8 +63,6 @@ class ToModelEntity(SQLModel):
 
 
 class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
-    is_placeholder: bool = False  # True if no template is actually required and a template is created for convenience
-
     @cached_property
     def user_template(self):
         return Template(self.user)
@@ -77,7 +75,7 @@ class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
 
     @classmethod
     def create_empty(cls) -> "PromptTemplateEntity":
-        template = cls(user="{{input}}", is_placeholder=True)
+        template = cls(user="{{input}}")
         return template
 
     @property
@@ -99,8 +97,6 @@ class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
         prompt_entity = PromptEntity(user=self.user_template.render(**user), expected_response=expected_response)
         if system is not None:
             prompt_entity.system = self.system_template.render(**system)
-        if not self.is_placeholder:
-            prompt_entity.template = self
         return prompt_entity
 
 

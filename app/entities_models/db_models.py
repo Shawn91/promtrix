@@ -56,6 +56,7 @@ class ToEntityModel(SQLModel):
 
 class PromptTemplateModel(PromptTemplate, ToEntityModel, table=True):
     __tablename__ = "prompt_template"
+    __table_args__ = (Index("idx_unique_system_user", "system", "user", unique=True),)
 
     id: Optional[UUID] = Field(default=None, primary_key=True)
 

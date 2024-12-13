@@ -3,15 +3,14 @@ import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, Iterable
 
-from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import or_, and_
+from sqlmodel import or_, and_, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import Config
 from app.entities_models.db_models import *
-from app.entities_models.entities import LLMServiceEntity, ToModelEntityType, DatasetEntity
+from app.entities_models.entities import LLMServiceEntity, ToModelEntityType, DatasetEntity, PromptTemplateEntity
 from app.shared.utils import logger
 
 
@@ -54,7 +53,28 @@ class Repository:
                 await session.close()
 
     async def get(self, entity: ToModelEntityType) -> ToModelEntityType | None:
-        raise NotImplementedError()
+        """
+        Get an entity from the database. If found, updates the entity's ID with the database ID.
+
+        Args:
+            entity: The entity to find in the database
+
+        Returns:
+            The entity with updated ID if found, None otherwise
+        """
+        async with self.session() as session:
+            # First try to find by unique combination
+            stmt = self.check_existance_statement(entity)
+            result = await session.execute(stmt)
+            db_model = result.scalar_one_or_none()
+            if not db_model and entity.id:
+                # If not found by unique combination, try to find by ID
+                db_model = await session.get(entity.model, entity.id)
+
+            if db_model:
+                entity.id = db_model.id
+                return entity
+            return None
 
     async def create(self, entity: ToModelEntityType) -> bool:
         """
@@ -95,6 +115,7 @@ class Repository:
                     result = await session.execute(stmt)
                     existing = result.scalar_one_or_none()
                     if existing:
+                        entity.id = existing.id
                         continue
 
                     model = entity.to_model()
@@ -102,7 +123,7 @@ class Repository:
 
                 # Attempt to save all new entities
                 await session.flush()
-                return True
+            return True
 
         except SQLAlchemyError as e:
             # Handle specific database errors
@@ -126,20 +147,6 @@ class LLMServiceRepository(Repository):
             LLMServiceModel.quantization == llm_service.quantization,
         )
 
-    async def get(self, llm_service: LLMServiceEntity) -> LLMServiceEntity | None:
-        async with self.session() as session:
-            # First try to find by unique combination
-            stmt = self.check_existance_statement(llm_service)
-            result = await session.execute(stmt)
-            db_service = result.scalar_one_or_none()
-            if not db_service and llm_service.id:
-                # If not found by unique combination, try to find by ID
-                db_service = await session.get(LLMServiceModel, llm_service.id)
-
-            if db_service:
-                return db_service.to_entity()
-            return None
-
 
 class DatasetRepository(Repository):
     def check_existance_statement(self, dataset: DatasetEntity):
@@ -150,19 +157,14 @@ class DatasetRepository(Repository):
             )
         )
 
-    async def get(self, dataset: DatasetEntity) -> DatasetEntity | None:
-        async with self.session() as session:
-            # First try to find by unique combination
-            stmt = self.check_existance_statement(dataset)
-            result = await session.execute(stmt)
-            db_dataset = result.scalar_one_or_none()
-            if not db_dataset and dataset.id:
-                # If not found by unique combination, try to find by ID
-                db_dataset = await session.get(DatasetModel, dataset.id)
 
-            if db_dataset:
-                return db_dataset.to_entity()
-            return None
+class PromptTemplateRepository(Repository):
+    def check_existance_statement(self, prompt_template: PromptTemplateEntity):
+        return select(PromptTemplateModel).where(
+            and_(
+                PromptTemplateModel.user == prompt_template.user, PromptTemplateModel.system == prompt_template.system
+            )
+        )
 
 
 # Create a single repository instance
@@ -171,3 +173,4 @@ repository.init_db_sync()
 
 llm_service_repository = LLMServiceRepository()
 dataset_repository = DatasetRepository()
+prompt_template_repository = PromptTemplateRepository()
