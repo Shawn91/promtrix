@@ -10,15 +10,20 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import Config
 from app.entities_models.db_models import *
-from app.entities_models.entities import LLMServiceEntity, ToModelEntityType, DatasetEntity, PromptTemplateEntity
+from app.entities_models.entities import (
+    LLMServiceEntity,
+    ToModelEntityType,
+    DatasetEntity,
+    PromptTemplateEntity,
+    TaskEntity,
+    ExecutionGroupEntity,
+)
 from app.shared.utils import logger
 
 
 class Repository:
     def __init__(self):
-        self._engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Config.DATABASE_PATH}", echo=Config.ENV == "development"
-        )
+        self._engine = create_async_engine(f"sqlite+aiosqlite:///{Config.DATABASE_PATH}", echo=False)
 
     async def init_db(self):
         async with self._engine.begin() as conn:
@@ -167,6 +172,18 @@ class PromptTemplateRepository(Repository):
         )
 
 
+class TaskRepository(Repository):
+    def check_existance_statement(self, task: TaskEntity):
+        return select(TaskModel).where(TaskModel.name == task.name)
+
+
+class ExecutionGroupRepository(Repository):
+    def check_existance_statement(self, executionGroup: ExecutionGroupEntity):
+        return select(ExecutionGroupModel).where(
+            ExecutionGroupModel.task_id == executionGroup.task.id, ExecutionGroupModel.name == executionGroup.name
+        )
+
+
 # Create a single repository instance
 repository = Repository()
 repository.init_db_sync()
@@ -174,3 +191,5 @@ repository.init_db_sync()
 llm_service_repository = LLMServiceRepository()
 dataset_repository = DatasetRepository()
 prompt_template_repository = PromptTemplateRepository()
+task_repository = TaskRepository()
+execution_group_repository = ExecutionGroupRepository()

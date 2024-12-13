@@ -12,12 +12,11 @@ Data retrieved from external systems should be Models and then converted to Enti
 before being used in the application.
 """
 import json
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Type
 from uuid import UUID
 
 if TYPE_CHECKING:
     from app.entities_models.entities import (
-        APIKeyEntity,
         LLMServiceEntity,
         PromptTemplateEntity,
         PromptEntity,
@@ -26,6 +25,7 @@ if TYPE_CHECKING:
         ExecutionGroupEntity,
         EvaluationEntity,
         DatasetEntity,
+        TaskEntity,
     )
 
 from sqlalchemy import Index
@@ -39,8 +39,8 @@ from app.entities_models.base import (
     Execution,
     Evaluation,
     LLMService,
-    APIKey,
     ExecutionGroup,
+    Task,
 )
 
 
@@ -123,9 +123,9 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
     prompt_id: UUID | None = Field(default=None, foreign_key="prompt.id")
     group_id: UUID | None = Field(default=None, foreign_key="execution_group.id")
     llm_service_id: UUID = Field(foreign_key="llm_service.id")
-    api_key_id: str = Field(foreign_key="api_key.key", description="The API key used to access the llm service")
 
     # llm parameters
+    api_key: str | None = Field(default=None, description="The API key used to access the llm service")
     temperature: Optional[float] = Field(default=None, description="The temperature used for sampling")
     max_completion_tokens: Optional[int] = Field(default=None, description="The maximum number of tokens to generate")
     top_k: Optional[int] = Field(default=None, description="The number of top-k tokens to keep")
@@ -142,14 +142,13 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
     frequency_penalty: Optional[float] = Field(default=None, description="The frequency penalty")
     repitition_penalty: Optional[float] = Field(default=None, description="The repitition penalty")
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
+    seed: Optional[int] = Field(default=None, description="The seed for the generation")
 
     group: "ExecutionGroupModel" = Relationship(back_populates="executions")
-    # task_id: uuid.UUID = Field(foreign_key="task.id")
     # execution_group_id: Optional[uuid.UUID] = Field(default=None, foreign_key="executiongroup.id")
     llm_responses: list["LLMResponseModel"] = Relationship(back_populates="execution")
     prompt: PromptModel = Relationship(back_populates="executions")
     llm_service: "LLMServiceModel" = Relationship(back_populates="executions")
-    api_key: "APIKeyModel" = Relationship(back_populates="executions")
 
     @property
     def entity(self):
@@ -158,17 +157,49 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
         return ExecutionEntity
 
     def to_entity(self) -> "ExecutionEntity":
-        data = self.model_dump(exclude={"group", "llm_responses", "prompt", "llm_service", "api_key"})
+        from app.entities_models.entities import LLMParametersEntity
+
+        data = self.model_dump(exclude={"group", "llm_responses", "prompt", "llm_service", "api_key", "task"})
+
+        # Create LLMParametersEntity from the llm parameters fields
+        llm_params_fields = {
+            "api_key": self.api_key,
+            "temperature": self.temperature,
+            "max_completion_tokens": self.max_completion_tokens,
+            "top_k": self.top_k,
+            "top_p": self.top_p,
+            "min_p": self.min_p,
+            "top_a": self.top_a,
+            "stop": self.stop,
+            "n": self.n,
+            "logprobs": self.logprobs,
+            "presence_penalty": self.presence_penalty,
+            "frequency_penalty": self.frequency_penalty,
+            "repitition_penalty": self.repitition_penalty,
+            "end_user_id": self.end_user_id,
+            "seed": self.seed,
+        }
+        data["llm_parameters"] = LLMParametersEntity(**{k: v for k, v in llm_params_fields.items() if v is not None})
+
+        # Add related entities if they exist
         if self.prompt:
             data["prompt"] = self.prompt.to_entity()
         if self.llm_responses:
             data["responses"] = [response.to_entity() for response in self.llm_responses]
+        if self.llm_service:
+            data["llm_service"] = self.llm_service.to_entity()
+        if self.group:
+            data["group"] = self.group.to_entity()
+
         return self.entity(**data)
 
 
 class ExecutionGroupModel(ExecutionGroup, ToEntityModel, table=True):
     __tablename__ = "execution_group"
+    __table_args__ = (Index("idx_unique_task_group_name", "task_id", "name", unique=True),)
+    task_id: UUID = Field(foreign_key="task.id")
     executions: list["ExecutionModel"] = Relationship(back_populates="group")
+    task: "TaskModel" = Relationship(back_populates="execution_groups")
 
     @property
     def entity(self):
@@ -231,24 +262,6 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
         return self.entity(**data)
 
 
-class APIKeyModel(APIKey, ToEntityModel, table=True):
-    __tablename__ = "api_key"
-    service_id: UUID = Field(foreign_key="llm_service.id")
-
-    service: "LLMServiceModel" = Relationship(back_populates="api_keys")
-    executions: list["ExecutionModel"] = Relationship(back_populates="api_key")
-
-    @property
-    def entity(self):
-        from app.entities_models.entities import APIKeyEntity
-
-        return APIKeyEntity
-
-    def to_entity(self) -> "APIKeyEntity":
-        data = self.model_dump(exclude={"service", "executions"})
-        return self.entity(**data)
-
-
 class LLMServiceModel(LLMService, ToEntityModel, table=True):
     __tablename__ = "llm_service"
     __table_args__ = (Index("idx_unique_llm_version_quant", "llm", "llm_version", "quantization", unique=True),)
@@ -257,7 +270,6 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
         default=None, description="Custom configuration for the LLM service in JSON format"
     )
 
-    api_keys: list["APIKeyModel"] = Relationship(back_populates="service")
     executions: list["ExecutionModel"] = Relationship(back_populates="llm_service")
 
     @property
@@ -270,6 +282,21 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
         data = self.model_dump(exclude={"api_keys", "executions", "custom_config"})
         if self.custom_config:
             data["custom_config"] = json.loads(self.custom_config)
-        if self.api_keys:
-            data["api_keys"] = [key.to_entity() for key in self.api_keys]
+        return self.entity(**data)
+
+
+class TaskModel(Task, ToEntityModel, table=True):
+    __tablename__ = "task"
+    execution_groups: list["ExecutionGroupModel"] = Relationship(back_populates="task")
+
+    @property
+    def entity(self) -> Type["TaskEntity"]:
+        from app.entities_models.entities import TaskEntity
+
+        return TaskEntity
+
+    def to_entity(self) -> "TaskEntity":
+        data = self.model_dump(exclude={"execution_groups"})
+        if self.execution_groups:
+            data["execution_groups"] = [group.to_entity() for group in self.execution_groups]
         return self.entity(**data)

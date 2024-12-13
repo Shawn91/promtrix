@@ -18,7 +18,6 @@ from typing import Optional, Iterator, Any, TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from app.entities_models.db_models import (
-        APIKeyModel,
         LLMServiceModel,
         PromptTemplateModel,
         PromptModel,
@@ -27,6 +26,7 @@ if TYPE_CHECKING:
         ExecutionModel,
         DatasetModel,
         ExecutionGroupModel,
+        TaskModel,
     )
 
 import datasets as HFDatasets
@@ -43,8 +43,8 @@ from app.entities_models.base import (
     ExecutionGroup,
     MySQLModel,
     Evaluation,
-    APIKey,
     LLMService,
+    Task,
 )
 
 
@@ -92,7 +92,7 @@ class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
         self,
         user: dict[str, str],
         system: dict[str, str] | None = None,
-        expected_response: Optional["ExpectedResponseEntity"] = None,
+        expected_response: Optional[str] = None,
     ) -> "PromptEntity":
         prompt_entity = PromptEntity(user=self.user_template.render(**user), expected_response=expected_response)
         if system is not None:
@@ -102,7 +102,7 @@ class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
 
 class PromptEntity(Prompt, ToModelEntity, Entity):
     template: PromptTemplateEntity | None = None
-    expected_response: Optional["ExpectedResponseEntity"] = None
+    expected_response: Optional[str] = None
 
     @property
     def model(self) -> type["PromptModel"]:
@@ -165,14 +165,7 @@ class LLMParametersEntity(MySQLModel, Entity):
     frequency_penalty: Optional[float] = Field(default=None, description="The frequency penalty")
     repitition_penalty: Optional[float] = Field(default=None, description="The repitition penalty")
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
-
-
-class ExpectedResponseEntity(MySQLModel, Entity):
-    """
-    Represents the expected response for a prompt
-    """
-
-    content: str = Field(description="The expected response text")
+    seed: Optional[int] = Field(default=None, description="The seed for the generation")
 
 
 class ExecutionEntity(Execution, ToModelEntity, Entity):
@@ -181,6 +174,8 @@ class ExecutionEntity(Execution, ToModelEntity, Entity):
     """
 
     prompt: PromptEntity = Field(description="The prompt being sent to the llm service")
+    llm_service: LLMService = Field(description="The llm_service that was used for the execution")
+    group: ExecutionGroup = Field(description="The execution group that this execution belongs to")
     llm_parameters: LLMParametersEntity | None = Field(
         default=None, description="The parameters used for the llm service call"
     )
@@ -195,14 +190,24 @@ class ExecutionEntity(Execution, ToModelEntity, Entity):
         return ExecutionModel
 
     def to_model(self) -> "ExecutionModel":
-        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses"})
+        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses", "llm_service", "task"})
+
         if self.llm_parameters:
             data.update(self.llm_parameters.model_dump())
+
+        # Add relationship IDs if they exist
+        if self.prompt and self.prompt.id:
+            data["prompt_id"] = self.prompt.id
+        if self.llm_service and self.llm_service.id:
+            data["llm_service_id"] = self.llm_service.id
+        if self.group and self.group.id:
+            data["group_id"] = self.group.id
         return self.model(**data)
 
 
 class ExecutionGroupEntity(ExecutionGroup, ToModelEntity, Entity):
-    executions: list[ExecutionEntity]
+    task: Task = Field(description="The task that was solved by the execution")
+    executions: list[ExecutionEntity] | None = None
 
     @property
     def model(self) -> type["ExecutionGroupModel"]:
@@ -211,7 +216,9 @@ class ExecutionGroupEntity(ExecutionGroup, ToModelEntity, Entity):
         return ExecutionGroupModel
 
     def to_model(self) -> "ExecutionGroupModel":
-        data = self.model_dump(exclude={"executions"})
+        data = self.model_dump(exclude={"executions", "task"})
+        if self.task and self.task.id:
+            data["task_id"] = self.task.id
         return self.model(**data)
 
 
@@ -229,7 +236,12 @@ class DatasetEntity(Dataset, ToModelEntity, Entity):
         """
         if not self.raw_dataset:
             raise ValueError("No raw dataset available to iterate over.")
+        if not isinstance(self.raw_dataset, HFDatasets.Dataset):
+            raise ValueError("Raw dataset is not a Hugging Face Dataset.")
         return iter(self.raw_dataset)
+
+    def iter_split_data(self, split: str):
+        return iter(self.splits[split])
 
     @property
     def model(self) -> type["DatasetModel"]:
@@ -276,22 +288,7 @@ class DatasetEntity(Dataset, ToModelEntity, Entity):
         self.children[dataset.name] = dataset
 
 
-class APIKeyEntity(APIKey, ToModelEntity, Entity):
-    service: Optional["LLMServiceEntity"]
-
-    @property
-    def model(self):
-        from app.entities_models.db_models import APIKeyModel
-
-        return APIKeyModel
-
-    def to_model(self) -> "APIKeyModel":
-        data = self.model_dump(exclude={"service"})
-        return self.model(**data)
-
-
 class LLMServiceEntity(LLMService, ToModelEntity, Entity):
-    api_keys: list[APIKeyEntity] | None = None
     custom_config: dict[str, Any] | None = None
 
     @property
@@ -301,9 +298,25 @@ class LLMServiceEntity(LLMService, ToModelEntity, Entity):
         return LLMServiceModel
 
     def to_model(self) -> "LLMServiceModel":
-        data = self.model_dump(exclude={"api_keys", "custom_config"})
+        data = self.model_dump(exclude={"custom_config"})
         if self.custom_config:
             data["custom_config"] = json.dumps(self.custom_config)
+        return self.model(**data)
+
+
+class TaskEntity(Task, ToModelEntity, Entity):
+    execution_groups: list[ExecutionGroupEntity] | None = Field(
+        default=None, description="The execution groups for this task"
+    )
+
+    @property
+    def model(self) -> type["TaskModel"]:
+        from app.entities_models.db_models import TaskModel
+
+        return TaskModel
+
+    def to_model(self) -> "TaskModel":
+        data = self.model_dump(exclude={"execution_groups"})
         return self.model(**data)
 
 
