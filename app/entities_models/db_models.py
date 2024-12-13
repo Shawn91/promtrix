@@ -25,7 +25,6 @@ if TYPE_CHECKING:
         ExecutionEntity,
         ExecutionGroupEntity,
         EvaluationEntity,
-        DatasetSplitEntity,
         DatasetEntity,
     )
 
@@ -38,7 +37,6 @@ from app.entities_models.base import (
     Dataset,
     LLMResponse,
     Execution,
-    DatasetSplit,
     Evaluation,
     LLMService,
     APIKey,
@@ -202,38 +200,20 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
     # evaluation_group: Optional["EvaluationGroup"] = Relationship(back_populates="evaluations")
 
 
-class DatasetSplitModel(DatasetSplit, ToEntityModel, table=True):
-    __tablename__ = "dataset_split"
-
-    dataset_id: UUID = Field(foreign_key="dataset.id")
-
-    dataset: "DatasetModel" = Relationship(back_populates="splits")
-
-    @property
-    def entity(self):
-        from app.entities_models.entities import DatasetSplitEntity
-
-        return DatasetSplitEntity
-
-    def to_entity(self) -> "DatasetSplitEntity":
-        data = self.model_dump(exclude={"dataset"})
-        return self.entity(**data)
-
-
 class DatasetModel(Dataset, ToEntityModel, table=True):
     __tablename__ = "dataset"
 
     parent_id: UUID | None = Field(default=None, foreign_key="dataset.id")
+    raw_dataset_dir: str = Field(description="The path to the directory containing the raw dataset ", unique=True)
 
     # Define the relationship to child datasets
-    subsets: list["DatasetModel"] = Relationship(
-        back_populates="parent",
+    children: list["DatasetModel"] = Relationship(
+        back_populates="parent", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
     )
     # Define the relationship to parent dataset
     parent: Optional["DatasetModel"] = Relationship(
-        back_populates="subsets", sa_relationship_kwargs={"remote_side": "[DatasetModel.id]"}
+        back_populates="children", sa_relationship_kwargs={"remote_side": "[DatasetModel.id]"}
     )
-    splits: list["DatasetSplitModel"] = Relationship(back_populates="dataset")
 
     @property
     def entity(self):
@@ -242,13 +222,11 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
         return DatasetEntity
 
     def to_entity(self) -> "DatasetEntity":
-        data = self.model_dump(exclude={"parent", "subsets", "splits"})
+        data = self.model_dump(exclude={"parent", "children"})
         if self.parent:
             data["parent"] = self.parent.to_entity()
-        if self.subsets:
-            data["subsets"] = [subset.to_entity() for subset in self.subsets]
-        if self.splits:
-            data["splits"] = [split.to_entity() for split in self.splits]
+        if self.children:
+            data["children"] = {child.name: child.to_entity() for child in self.children}
         return self.entity(**data)
 
 
@@ -272,7 +250,7 @@ class APIKeyModel(APIKey, ToEntityModel, table=True):
 
 class LLMServiceModel(LLMService, ToEntityModel, table=True):
     __tablename__ = "llm_service"
-    __table_args__ = (Index("idx_unique_model_version_quant", "llm", "llm_version", "quantization", unique=True),)
+    __table_args__ = (Index("idx_unique_llm_version_quant", "llm", "llm_version", "quantization", unique=True),)
 
     custom_config: Optional[str] = Field(
         default=None, description="Custom configuration for the LLM service in JSON format"

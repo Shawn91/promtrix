@@ -14,7 +14,7 @@ before being used in the application.
 """
 import json
 from functools import cached_property
-from typing import Optional, Iterator, Any, Union, TYPE_CHECKING
+from typing import Optional, Iterator, Any, TYPE_CHECKING, TypeVar
 
 if TYPE_CHECKING:
     from app.entities_models.db_models import (
@@ -25,7 +25,6 @@ if TYPE_CHECKING:
         LLMResponseModel,
         EvaluationModel,
         ExecutionModel,
-        DatasetSplitModel,
         DatasetModel,
         ExecutionGroupModel,
     )
@@ -39,7 +38,6 @@ from app.entities_models.base import (
     PromptTemplate,
     Prompt,
     Dataset,
-    DatasetSplit,
     LLMResponse,
     Execution,
     ExecutionGroup,
@@ -48,6 +46,10 @@ from app.entities_models.base import (
     APIKey,
     LLMService,
 )
+
+
+class Entity:
+    ...
 
 
 class ToModelEntity(SQLModel):
@@ -60,7 +62,7 @@ class ToModelEntity(SQLModel):
         return self.model(**self.model_dump(exclude_unset=True))
 
 
-class PromptTemplateEntity(PromptTemplate, ToModelEntity):
+class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
     is_placeholder: bool = False  # True if no template is actually required and a template is created for convenience
 
     @cached_property
@@ -102,7 +104,7 @@ class PromptTemplateEntity(PromptTemplate, ToModelEntity):
         return prompt_entity
 
 
-class PromptEntity(Prompt, ToModelEntity):
+class PromptEntity(Prompt, ToModelEntity, Entity):
     template: PromptTemplateEntity | None = None
     expected_response: Optional["ExpectedResponseEntity"] = None
 
@@ -117,7 +119,7 @@ class PromptEntity(Prompt, ToModelEntity):
         return self.model(**data)
 
 
-class LLMResponseEntity(LLMResponse, ToModelEntity):
+class LLMResponseEntity(LLMResponse, ToModelEntity, Entity):
     evaluation: Optional["EvaluationEntity"] = None
 
     @property
@@ -131,7 +133,7 @@ class LLMResponseEntity(LLMResponse, ToModelEntity):
         return self.model(**data)
 
 
-class EvaluationEntity(Evaluation, ToModelEntity):
+class EvaluationEntity(Evaluation, ToModelEntity, Entity):
     steps: list | None = Field(default=None, description="The steps taken to evaluate the response")
 
     @property
@@ -145,7 +147,7 @@ class EvaluationEntity(Evaluation, ToModelEntity):
         return self.model(**data)
 
 
-class LLMParametersEntity(MySQLModel, table=False):
+class LLMParametersEntity(MySQLModel, Entity):
     """
     Represents the parameters used for one call to an llm service
     """
@@ -169,7 +171,7 @@ class LLMParametersEntity(MySQLModel, table=False):
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
 
 
-class ExpectedResponseEntity(MySQLModel, table=False):
+class ExpectedResponseEntity(MySQLModel, Entity):
     """
     Represents the expected response for a prompt
     """
@@ -177,7 +179,7 @@ class ExpectedResponseEntity(MySQLModel, table=False):
     content: str = Field(description="The expected response text")
 
 
-class ExecutionEntity(Execution, ToModelEntity):
+class ExecutionEntity(Execution, ToModelEntity, Entity):
     """
     Represents a prompt being sent to a llm_service
     """
@@ -203,7 +205,7 @@ class ExecutionEntity(Execution, ToModelEntity):
         return self.model(**data)
 
 
-class ExecutionGroupEntity(ExecutionGroup, ToModelEntity):
+class ExecutionGroupEntity(ExecutionGroup, ToModelEntity, Entity):
     executions: list[ExecutionEntity]
 
     @property
@@ -217,25 +219,13 @@ class ExecutionGroupEntity(ExecutionGroup, ToModelEntity):
         return self.model(**data)
 
 
-class DatasetSplitEntity(DatasetSplit, ToModelEntity):
-    @property
-    def model(self) -> type["DatasetSplitModel"]:
-        from app.entities_models.db_models import DatasetSplitModel
-
-        return DatasetSplitModel
-
-    def to_model(self) -> "DatasetSplitModel":
-        data = self.model_dump()
-        return self.model(**data)
-
-
-class DatasetEntity(Dataset, ToModelEntity):
+class DatasetEntity(Dataset, ToModelEntity, Entity):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    parent: Union[None, "DatasetEntity"] = None
-    subsets: Union[None, list["DatasetEntity"]] = None
+    raw_dataset_dir: str = Field(description="The path to the directory containing the raw dataset")
+    parent: Optional["DatasetEntity"] = None
+    children: Optional[dict[str, "DatasetEntity"]] = None  # Can contain both subdatasets and splits
     raw_dataset: HFDatasets.Dataset | None = None
-    splits: list[DatasetSplitEntity] | None = None
 
     def __iter__(self) -> Iterator[dict]:
         """
@@ -252,11 +242,45 @@ class DatasetEntity(Dataset, ToModelEntity):
         return DatasetModel
 
     def to_model(self) -> "DatasetModel":
-        data = self.model_dump(exclude={"parent", "subsets", "raw_dataset", "splits"})
+        data = self.model_dump(exclude={"parent", "children", "raw_dataset"})
+
+        # If there's a parent, add its ID
+        if self.parent:
+            data["parent_id"] = self.parent.id
         return self.model(**data)
 
+    @property
+    def splits(self) -> dict[str, "DatasetEntity"]:
+        """Get all child datasets that are splits"""
+        if not self.children:
+            return {}
+        return {name: dataset for name, dataset in self.children.items() if dataset.is_split}
 
-class APIKeyEntity(APIKey, ToModelEntity):
+    @property
+    def subdatasets(self) -> dict[str, "DatasetEntity"]:
+        """Get all child datasets that are not splits"""
+        if not self.children:
+            return {}
+        return {name: dataset for name, dataset in self.children.items() if not dataset.is_split}
+
+    def add_split(self, dataset: "DatasetEntity"):
+        """Add a split to this dataset"""
+        if not self.children:
+            self.children = {}
+        dataset.is_split = True
+        dataset.parent = self
+        self.children[dataset.name] = dataset
+
+    def add_subdataset(self, dataset: "DatasetEntity"):
+        """Add a subdataset to this dataset"""
+        if not self.children:
+            self.children = {}
+        dataset.is_split = False
+        dataset.parent = self
+        self.children[dataset.name] = dataset
+
+
+class APIKeyEntity(APIKey, ToModelEntity, Entity):
     service: Optional["LLMServiceEntity"]
 
     @property
@@ -270,7 +294,7 @@ class APIKeyEntity(APIKey, ToModelEntity):
         return self.model(**data)
 
 
-class LLMServiceEntity(LLMService):
+class LLMServiceEntity(LLMService, ToModelEntity, Entity):
     api_keys: list[APIKeyEntity] | None = None
     custom_config: dict[str, Any] | None = None
 
@@ -285,3 +309,7 @@ class LLMServiceEntity(LLMService):
         if self.custom_config:
             data["custom_config"] = json.dumps(self.custom_config)
         return self.model(**data)
+
+
+EntityType = TypeVar("EntityType", bound=Entity)
+ToModelEntityType = TypeVar("ToModelEntityType", bound=ToModelEntity)

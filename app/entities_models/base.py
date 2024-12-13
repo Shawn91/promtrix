@@ -172,28 +172,14 @@ class Evaluation(MySQLModel, table=False):
 #     evaluations: List[Evaluation] = Relationship(back_populates="evaluation_group")
 
 
-#
-class DatasetSplit(MySQLModel, table=False):
-    """
-    Contains information about a split of a dataset, e.g. train, test, dev
-    """
-
-    id: UUID = Field(default_factory=uuid4, primary_key=True)
-    name: str = Field(description="The name of the split, e.g. train, test, dev", index=True)
-    size: int = Field(description="The size of the split in bytes")
-    count: int = Field(description="The number of examples in the split")
-
-
 class Dataset(MySQLModel):
     """
     Represents a dataset used for testing or evaluating a model or a prompt
     """
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    raw_dataset_dir: str = Field(description="The path to the directory containing the raw dataset ")
     name: str = Field(
         description="The name of the dataset. If this is a subdataset, just include the name of the subdataset",
-        index=True,
     )
     version: str | None = Field(default=None, description="The version of the dataset")
     description: str | None = None
@@ -201,6 +187,9 @@ class Dataset(MySQLModel):
     size: int | None = Field(default=None, description="The size of the dataset in bytes")
     created_at: datetime = Field(
         default_factory=datetime.now, description="The date and time when the dataset was created"
+    )
+    is_split: bool = Field(
+        default=False, description="True if this dataset is a split of another dataset (e.g., train/test/validation)"
     )
 
     # executions: List[Execution] = Relationship(back_populates="dataset")
