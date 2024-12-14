@@ -102,7 +102,6 @@ class PromptTemplateEntity(PromptTemplate, ToModelEntity, Entity):
 
 class PromptEntity(Prompt, ToModelEntity, Entity):
     template: PromptTemplateEntity | None = None
-    expected_response: Optional[str] = None
 
     @property
     def model(self) -> type["PromptModel"]:
@@ -124,8 +123,9 @@ class LLMResponseEntity(LLMResponse, ToModelEntity, Entity):
 
         return LLMResponseModel
 
-    def to_model(self) -> "LLMResponseModel":
+    def to_model(self, execution: "ExecutionEntity") -> "LLMResponseModel":
         data = self.model_dump(exclude={"evaluation"})
+        data["execution_id"] = execution.id
         return self.model(**data)
 
 
@@ -175,12 +175,12 @@ class ExecutionEntity(Execution, ToModelEntity, Entity):
 
     prompt: PromptEntity = Field(description="The prompt being sent to the llm service")
     llm_service: LLMService = Field(description="The llm_service that was used for the execution")
-    group: ExecutionGroup = Field(description="The execution group that this execution belongs to")
+    group: "ExecutionGroupEntity" = Field(description="The execution group that this execution belongs to")
     llm_parameters: LLMParametersEntity | None = Field(
         default=None, description="The parameters used for the llm service call"
     )
-    responses: list[LLMResponseEntity] = Field(
-        default_factory=list, description="The responses received from the llm service"
+    responses: list[LLMResponseEntity] | None = Field(
+        default=None, description="The responses received from the llm service"
     )
 
     @property
@@ -190,7 +190,7 @@ class ExecutionEntity(Execution, ToModelEntity, Entity):
         return ExecutionModel
 
     def to_model(self) -> "ExecutionModel":
-        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses", "llm_service", "task"})
+        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses", "llm_service", "group", "task"})
 
         if self.llm_parameters:
             data.update(self.llm_parameters.model_dump())
@@ -202,7 +202,8 @@ class ExecutionEntity(Execution, ToModelEntity, Entity):
             data["llm_service_id"] = self.llm_service.id
         if self.group and self.group.id:
             data["group_id"] = self.group.id
-        return self.model(**data)
+        model = self.model(**data)
+        return model
 
 
 class ExecutionGroupEntity(ExecutionGroup, ToModelEntity, Entity):

@@ -41,6 +41,7 @@ class Prompt(MySQLModel, table=False):
         default_factory=datetime.now, description="The date and time when the prompt was created"
     )
     token_count: Optional[int] = Field(default=None, description="The number of tokens in the prompt")
+    expected_response: Optional[str] = None
 
     def set_token_count(self, token_count: int):
         self.token_count = token_count
@@ -100,9 +101,9 @@ class Execution(MySQLModel, table=False):
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     request_id: str | None = Field(default=None, description="The id of the id provided by the llm service")
-    duration: int = Field(description="The duration of the execution in milliseconds")
+    duration: int | None = Field(default=None, description="The duration of the execution in milliseconds")
     cost: Optional[float] = Field(default=None, description="The cost of the execution")
-    token_count: int = Field(description="The number of tokens in the response")
+    token_count: int | None = Field(default=None, description="The number of tokens in the response")
     created_at: datetime = Field(
         default_factory=datetime.now, description="The date and time when the execution was created"
     )
