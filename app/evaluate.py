@@ -6,7 +6,7 @@ from app.entities_models.entities import (
     LLMResponseEntity,
     PromptTemplateEntity,
     LLMParametersEntity,
-    ExecutionGroupEntity,
+    LLMInteractionGroupEntity,
     EvaluationEntity,
 )
 from app.shared.utils import iterate, asyncio_gather
@@ -47,28 +47,28 @@ async def evaluate_by_llm(prompt: PromptEntity, response: LLMResponseEntity) -> 
         )
     )[0]
     start = datetime.now()
-    evaluate_answer_execution = await send_to_llm(
+    evaluate_answer_interaction = await send_to_llm(
         prompt=prompt, llm_params=LLMParametersEntity(api_key=Config.OPENROUTER_API_KEY)
     )
-    score = 1 if evaluate_answer_execution.responses[0].content.lower().strip(".") == "correct" else 0
+    score = 1 if evaluate_answer_interaction.responses[0].content.lower().strip(".") == "correct" else 0
     duration = (datetime.now() - start).microseconds
     evaluation = EvaluationEntity(
         method="evaluate_answer_by_llm",
         score=score,
         duration=duration,
-        cost=evaluate_answer_execution.cost,
-        steps=[evaluate_answer_execution],
+        cost=evaluate_answer_interaction.cost,
+        steps=[evaluate_answer_interaction],
     )
     response.evaluation = evaluation
     return evaluation
 
 
-async def evaluate_group_by_llm(execution_group: ExecutionGroupEntity, batch_size=5):
+async def evaluate_group_by_llm(llm_interaction_group: LLMInteractionGroupEntity, batch_size=5):
     batches = [[]]
-    for execution in iterate(execution_group.executions):
-        for response in execution.responses:
-            batches[-1].append((execution, response))
+    for interaction in iterate(llm_interaction_group.llm_interactions):
+        for response in interaction.responses:
+            batches[-1].append((interaction, response))
             if len(batches[-1]) == batch_size:
                 batches.append([])
     for batch in batches:
-        await asyncio_gather(*[evaluate_by_llm(execution.prompt, res) for (execution, res) in batch])
+        await asyncio_gather(*[evaluate_by_llm(interaction.prompt, res) for (interaction, res) in batch])

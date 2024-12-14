@@ -21,8 +21,8 @@ if TYPE_CHECKING:
         PromptTemplateEntity,
         PromptEntity,
         LLMResponseEntity,
-        ExecutionEntity,
-        ExecutionGroupEntity,
+        LLMInteractionEntity,
+        LLMInteractionGroupEntity,
         EvaluationEntity,
         DatasetEntity,
         TaskEntity,
@@ -36,11 +36,9 @@ from app.entities_models.base import (
     Prompt,
     Dataset,
     LLMResponse,
-    Execution,
     Evaluation,
     LLMService,
-    ExecutionGroup,
-    Task,
+    Task, LLMInteraction,
 )
 
 
@@ -80,7 +78,7 @@ class PromptModel(Prompt, ToEntityModel, table=True):
     template_id: UUID | None = Field(default=None, foreign_key="prompt_template.id")
 
     template: PromptTemplateModel = Relationship(back_populates="prompts")
-    executions: list["ExecutionModel"] = Relationship(back_populates="prompt")
+    llm_interactions: list["LLMInteractionModel"] = Relationship(back_populates="prompt")
 
     @property
     def entity(self):
@@ -89,7 +87,7 @@ class PromptModel(Prompt, ToEntityModel, table=True):
         return PromptEntity
 
     def to_entity(self) -> "PromptEntity":
-        data = self.model_dump(exclude={"template", "executions"})
+        data = self.model_dump(exclude={"template", "llm_interactions"})
         if self.template:
             data["template"] = self.template.to_entity()
         return self.entity(**data)
@@ -98,10 +96,10 @@ class PromptModel(Prompt, ToEntityModel, table=True):
 class LLMResponseModel(LLMResponse, ToEntityModel, table=True):
     __tablename__ = "llm_response"
 
-    execution_id: UUID = Field(foreign_key="execution.id")
+    llm_interaction_id: UUID = Field(foreign_key="llm_interaction.id")
     evaluation_id: UUID | None = Field(default=None, foreign_key="evaluation.id")
 
-    execution: "ExecutionModel" = Relationship(back_populates="llm_responses")
+    llm_interaction: "LLMInteractionModel" = Relationship(back_populates="llm_responses")
     evaluation: "EvaluationModel" = Relationship(back_populates="llm_response")
 
     @property
@@ -111,17 +109,17 @@ class LLMResponseModel(LLMResponse, ToEntityModel, table=True):
         return LLMResponseEntity
 
     def to_entity(self) -> "LLMResponseEntity":
-        data = self.model_dump(exclude={"execution", "evaluation"})
+        data = self.model_dump(exclude={"llm_interaction", "evaluation"})
         if self.evaluation:
             data["evaluation"] = self.evaluation.to_entity()
         return self.entity(**data)
 
 
-class ExecutionModel(Execution, ToEntityModel, table=True):
-    __tablename__ = "execution"
+class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
+    __tablename__ = "llm_interaction"
 
     prompt_id: UUID | None = Field(default=None, foreign_key="prompt.id")
-    group_id: UUID | None = Field(default=None, foreign_key="execution_group.id")
+    group_id: UUID | None = Field(default=None, foreign_key="llm_interaction_group.id")
     llm_service_id: UUID = Field(foreign_key="llm_service.id")
 
     # llm parameters
@@ -144,19 +142,18 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
     seed: Optional[int] = Field(default=None, description="The seed for the generation")
 
-    group: "ExecutionGroupModel" = Relationship(back_populates="executions")
-    # execution_group_id: Optional[uuid.UUID] = Field(default=None, foreign_key="executiongroup.id")
-    llm_responses: list["LLMResponseModel"] = Relationship(back_populates="execution")
-    prompt: PromptModel = Relationship(back_populates="executions")
-    llm_service: "LLMServiceModel" = Relationship(back_populates="executions")
+    group: "LLMInteractionGroupModel" = Relationship(back_populates="llm_interactions")
+    llm_responses: list["LLMResponseModel"] = Relationship(back_populates="llm_interaction")
+    prompt: PromptModel = Relationship(back_populates="llm_interactions")
+    llm_service: "LLMServiceModel" = Relationship(back_populates="llm_interactions")
 
     @property
     def entity(self):
-        from app.entities_models.entities import ExecutionEntity
+        from app.entities_models.entities import LLMInteractionEntity
 
-        return ExecutionEntity
+        return LLMInteractionEntity
 
-    def to_entity(self) -> "ExecutionEntity":
+    def to_entity(self) -> "LLMInteractionEntity":
         from app.entities_models.entities import LLMParametersEntity
 
         data = self.model_dump(exclude={"group", "llm_responses", "prompt", "llm_service", "api_key", "task"})
@@ -194,23 +191,23 @@ class ExecutionModel(Execution, ToEntityModel, table=True):
         return self.entity(**data)
 
 
-class ExecutionGroupModel(ExecutionGroup, ToEntityModel, table=True):
-    __tablename__ = "execution_group"
+class LLMInteractionGroupModel(LLMInteraction, ToEntityModel, table=True):
+    __tablename__ = "llm_interaction_group"
     __table_args__ = (Index("idx_unique_task_group_name", "task_id", "name", unique=True),)
     task_id: UUID = Field(foreign_key="task.id")
-    executions: list["ExecutionModel"] = Relationship(back_populates="group")
-    task: "TaskModel" = Relationship(back_populates="execution_groups")
+    llm_interactions: list["LLMInteractionModel"] = Relationship(back_populates="group")
+    task: "TaskModel" = Relationship(back_populates="llm_interaction_groups")
 
     @property
     def entity(self):
-        from app.entities_models.entities import ExecutionGroupEntity
+        from app.entities_models.entities import LLMInteractionGroupEntity
 
-        return ExecutionGroupEntity
+        return LLMInteractionGroupEntity
 
-    def to_entity(self) -> "ExecutionGroupEntity":
-        data = self.model_dump(exclude={"executions"})
-        if self.executions:
-            data["executions"] = [execution.to_entity() for execution in self.executions]
+    def to_entity(self) -> "LLMInteractionGroupEntity":
+        data = self.model_dump(exclude={"llm_interactions"})
+        if self.llm_interactions:
+            data["llm_interactions"] = [interaction.to_entity() for interaction in self.llm_interactions]
         return self.entity(**data)
 
 
@@ -270,7 +267,7 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
         default=None, description="Custom configuration for the LLM service in JSON format"
     )
 
-    executions: list["ExecutionModel"] = Relationship(back_populates="llm_service")
+    llm_interactions: list["LLMInteractionModel"] = Relationship(back_populates="llm_service")
 
     @property
     def entity(self):
@@ -279,7 +276,7 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
         return LLMServiceEntity
 
     def to_entity(self) -> "LLMServiceEntity":
-        data = self.model_dump(exclude={"api_keys", "executions", "custom_config"})
+        data = self.model_dump(exclude={"api_keys", "llm_interactions", "custom_config"})
         if self.custom_config:
             data["custom_config"] = json.loads(self.custom_config)
         return self.entity(**data)
@@ -287,7 +284,7 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
 
 class TaskModel(Task, ToEntityModel, table=True):
     __tablename__ = "task"
-    execution_groups: list["ExecutionGroupModel"] = Relationship(back_populates="task")
+    llm_interaction_groups: list["LLMInteractionGroupModel"] = Relationship(back_populates="task")
 
     @property
     def entity(self) -> Type["TaskEntity"]:
@@ -296,7 +293,7 @@ class TaskModel(Task, ToEntityModel, table=True):
         return TaskEntity
 
     def to_entity(self) -> "TaskEntity":
-        data = self.model_dump(exclude={"execution_groups"})
-        if self.execution_groups:
-            data["execution_groups"] = [group.to_entity() for group in self.execution_groups]
+        data = self.model_dump(exclude={"llm_interaction_groups"})
+        if self.llm_interaction_groups:
+            data["llm_interaction_groups"] = [group.to_entity() for group in self.llm_interaction_groups]
         return self.entity(**data)

@@ -12,14 +12,12 @@ from litellm import completion_cost
 from app.config import PROJECT_ROOT
 from app.entities_models.entities import (
     DatasetEntity,
-    DatasetSplitEntity,
     PromptTemplateEntity,
     PromptEntity,
     LLMResponseEntity,
-    ExecutionEntity,
-    ExecutionGroupEntity,
+    LLMInteractionEntity,
+    LLMInteractionGroupEntity,
     LLMParametersEntity,
-    ExpectedResponseEntity,
 )
 from app.shared.utils import asyncio_gather
 
@@ -29,14 +27,9 @@ def load_dataset(path, name) -> DatasetEntity:
     raw_dataset = load_hf_dataset(path=path, name=name, cache_dir=cache_dir)
     if isinstance(raw_dataset, HFDatasetDict):
         raw_dataset = raw_dataset["test"]
-    splits = [
-        DatasetSplitEntity(name=split.name, size=split.num_bytes, count=split.num_examples)
-        for _, split in raw_dataset.info.splits.items()
-    ]
     return DatasetEntity(
         name=raw_dataset.info.config_name if raw_dataset.info.config_name else raw_dataset.info.dataset_name,
         size=raw_dataset.info.size_in_bytes,
-        splits=splits,
         version=raw_dataset.info.version.version_str,
         raw_dataset=raw_dataset,
         raw_dataset_dir=cache_dir,
@@ -66,9 +59,9 @@ def generate_prompt(
         yield prompt_template.generate_prompt(user=variables, expected_response=expected_response)
 
 
-def create_execution_entity(
+def create_llm_interaction_entity(
     prompt: PromptEntity, duration: int, response: litellm.ModelResponse, llm_params: LLMParametersEntity | None = None
-) -> ExecutionEntity:
+) -> LLMInteractionEntity:
     reponse_entities = [
         LLMResponseEntity(
             content=choice.message.content,
@@ -82,7 +75,7 @@ def create_execution_entity(
         cost = completion_cost(completion_response=response)
     except litellm.exceptions.NotFoundError:
         cost = None
-    return ExecutionEntity(
+    return LLMInteractionEntity(
         prompt=prompt,
         request_id=response.id,
         duration=duration,
@@ -93,7 +86,7 @@ def create_execution_entity(
     )
 
 
-async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> ExecutionEntity:
+async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> LLMInteractionEntity:
     messages = []
     if prompt.system:
         messages.append({"role": "system", "content": prompt.system})
@@ -107,7 +100,7 @@ async def send_to_llm(prompt: PromptEntity, llm_params: LLMParametersEntity) -> 
     )
     duration = (datetime.now() - start_time).microseconds
     prompt.token_count = response.usage.prompt_tokens
-    return create_execution_entity(prompt=prompt, duration=duration, llm_params=llm_params, response=response)
+    return create_llm_interaction_entity(prompt=prompt, duration=duration, llm_params=llm_params, response=response)
 
 
 async def execute_task(
@@ -115,19 +108,19 @@ async def execute_task(
     prompt_templates: list[PromptTemplateEntity] | None = None,
     dataset: DatasetEntity | None = None,
     batch_size: int = 5,
-) -> ExecutionGroupEntity:
+) -> LLMInteractionGroupEntity:
     llm_requests = []
-    executions = []
+    llm_interactions = []
     start_time = datetime.now()
     for prompts in generate_prompt(prompt_templates=prompt_templates, dataset=dataset):
         llm_requests.append(send_to_llm(prompts, llm_params=llm_params))
         if len(llm_requests) == batch_size:
-            executions.extend(await asyncio_gather(*llm_requests))
+            llm_interactions.extend(await asyncio_gather(*llm_requests))
             llm_requests = []
     if llm_requests:
-        executions.extend(await asyncio_gather(*llm_requests))
+        llm_interactions.extend(await asyncio_gather(*llm_requests))
     duration = (datetime.now() - start_time).microseconds
-    return ExecutionGroupEntity(executions=executions, duration=duration)
+    return LLMInteractionGroupEntity(llm_interactions=llm_interactions, duration=duration)
 
 
 if __name__ == "__main__":

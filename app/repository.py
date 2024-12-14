@@ -16,7 +16,7 @@ from app.entities_models.entities import (
     DatasetEntity,
     PromptTemplateEntity,
     TaskEntity,
-    ExecutionGroupEntity,
+    LLMInteractionGroupEntity,
 )
 from app.shared.utils import logger
 
@@ -177,10 +177,10 @@ class TaskRepository(Repository):
         return select(TaskModel).where(TaskModel.name == task.name)
 
 
-class ExecutionGroupRepository(Repository):
-    def check_existance_statement(self, executionGroup: ExecutionGroupEntity):
-        return select(ExecutionGroupModel).where(
-            ExecutionGroupModel.task_id == executionGroup.task.id, ExecutionGroupModel.name == executionGroup.name
+class LLMInteractionGroupRepository(Repository):
+    def check_existance_statement(self, llm_interaction_group: LLMInteractionGroupEntity):
+        return select(LLMInteractionGroupModel).where(
+            LLMInteractionGroupModel.task_id == llm_interaction_group.task.id, LLMInteractionGroupModel.name == llm_interaction_group.name
         )
 
 
@@ -192,4 +192,4 @@ llm_service_repository = LLMServiceRepository()
 dataset_repository = DatasetRepository()
 prompt_template_repository = PromptTemplateRepository()
 task_repository = TaskRepository()
-execution_group_repository = ExecutionGroupRepository()
+llm_interaction_group_repository = LLMInteractionGroupRepository()

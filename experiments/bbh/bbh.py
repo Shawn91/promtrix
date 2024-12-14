@@ -9,10 +9,10 @@ from litellm.types.utils import ModelResponse
 from nicegui import ui
 
 from app.config import Config, PROJECT_ROOT
-from app.entities_models.entities import PromptEntity, ExecutionGroupEntity, ExpectedResponseEntity
+from app.entities_models.entities import PromptEntity, LLMInteractionGroupEntity
 from app.evaluate import evaluate_group_by_llm
 from app.shared.utils import asyncio_gather
-from app.task_execution import create_execution_entity
+from app.task_execution import create_llm_interaction_entity
 
 # List of all subdatasets
 NAMES = [
@@ -91,7 +91,7 @@ async def save_sample_questions_and_responses():
             tasks.append(save_raw_llm_response(name, i, example["input"], example["target"]))
 
 
-def load_sample_questions_and_responses() -> ExecutionGroupEntity:
+def load_sample_questions_and_responses() -> LLMInteractionGroupEntity:
     data_dir = PROJECT_ROOT / "experiments" / "bbh" / "raw_llm_responses"
     all_data: dict[str, list[dict]] = {}  # subdataset_name -> list of data
     for file_name in data_dir.iterdir():
@@ -102,29 +102,29 @@ def load_sample_questions_and_responses() -> ExecutionGroupEntity:
                 if not data["subdataset_name"] in all_data:
                     all_data[data["subdataset_name"]] = []
                 all_data[data["subdataset_name"]].append(data)
-    executions = []
+    interactions = []
     for subdataset_name, data in all_data.items():
         for i, example in enumerate(data):
             prompt = PromptEntity(
                 user="Let's think step by step. \n" + example["question"],
-                expected_response=ExpectedResponseEntity(content=example["answer"]),
+                expected_response=example["answer"],
             )
-            execution = create_execution_entity(prompt=prompt, duration=0, response=example["response"])
-            executions.append(execution)
-    return ExecutionGroupEntity(executions=executions, duration=0)
+            interaction = create_llm_interaction_entity(prompt=prompt, duration=0, response=example["response"])
+            interactions.append(interaction)
+    return LLMInteractionGroupEntity(llm_interactions=interactions, duration=0)
 
 
-async def evaluate_and_save_results(execution_group: ExecutionGroupEntity):
+async def evaluate_and_save_results(llm_interaction_group: LLMInteractionGroupEntity):
     # await evaluate_group_with_llm(execution_group=execution_group)
-    await evaluate_group_by_llm(execution_group=execution_group, batch_size=3)
+    await evaluate_group_by_llm(llm_interaction_group=llm_interaction_group, batch_size=3)
     with open(PROJECT_ROOT / "experiments" / "bbh" / "evaluations.json", "w", encoding="utf-8") as f:
-        f.write(execution_group.model_dump_json())
+        f.write(llm_interaction_group.model_dump_json())
 
 
-def visualize_execution_group():
+def visualize_llm_interaction_group():
     # load data
     with open(PROJECT_ROOT / "experiments" / "bbh" / "evaluations.json", "r", encoding="utf-8") as f:
-        execution_group = ExecutionGroupEntity.model_validate_json(f.read())
+        llm_interaction_group = LLMInteractionGroupEntity.model_validate_json(f.read())
     columns = [
         {
             "name": "Prompt",
@@ -156,14 +156,14 @@ def visualize_execution_group():
         },
     ]
     ui.table(
-        columns=columns, rows=[execution.model_dump() for execution in execution_group.executions], row_key="id"
+        columns=columns, rows=[interaction.model_dump() for interaction in llm_interaction_group.llm_interactions], row_key="id"
     ).classes("full-width")
     ui.run()
 
 
 if __name__ in {"__main__", "__mp_main__"}:
     # asyncio.run(save_sample_questions_and_responses())
-    # execution_group = load_sample_questions_and_responses()
-    # asyncio.run(evaluate_and_save_results(execution_group))
+    # llm_interaction_group = load_sample_questions_and_responses()
+    # asyncio.run(evaluate_and_save_results(llm_interaction_group))
     # 改为先保存LLM的结果，再读取然后用 LLM 评估
-    visualize_execution_group()
+    visualize_llm_interaction_group()
