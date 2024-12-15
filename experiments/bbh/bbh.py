@@ -156,7 +156,9 @@ def visualize_llm_interaction_group():
         },
     ]
     ui.table(
-        columns=columns, rows=[interaction.model_dump() for interaction in llm_interaction_group.llm_interactions], row_key="id"
+        columns=columns,
+        rows=[interaction.model_dump() for interaction in llm_interaction_group.llm_interactions],
+        row_key="id",
     ).classes("full-width")
     ui.run()
 

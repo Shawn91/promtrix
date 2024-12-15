@@ -5,18 +5,21 @@ from typing import AsyncGenerator, Iterable
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import or_, and_, select
+from sqlmodel import or_, select, and_
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import Config
 from app.entities_models.db_models import *
 from app.entities_models.entities import (
+    PromptEntity,
     LLMServiceEntity,
     ToModelEntityType,
     DatasetEntity,
     PromptTemplateEntity,
     TaskEntity,
     LLMInteractionGroupEntity,
+    LLMInteractionGroupEntity,
+    LLMInteractionEntity,
 )
 from app.shared.utils import logger
 
@@ -172,6 +175,11 @@ class PromptTemplateRepository(Repository):
         )
 
 
+class PromptRepository(Repository):
+    def check_existance_statement(self, prompt: PromptEntity):
+        return select(PromptModel).where(PromptModel.user == prompt.user, PromptModel.system == prompt.system)
+
+
 class TaskRepository(Repository):
     def check_existance_statement(self, task: TaskEntity):
         return select(TaskModel).where(TaskModel.name == task.name)
@@ -180,7 +188,91 @@ class TaskRepository(Repository):
 class LLMInteractionGroupRepository(Repository):
     def check_existance_statement(self, llm_interaction_group: LLMInteractionGroupEntity):
         return select(LLMInteractionGroupModel).where(
-            LLMInteractionGroupModel.task_id == llm_interaction_group.task.id, LLMInteractionGroupModel.name == llm_interaction_group.name
+            LLMInteractionGroupModel.task_id == llm_interaction_group.task.id,
+            LLMInteractionGroupModel.name == llm_interaction_group.name,
+        )
+
+
+class LLMInteractionRepository(Repository):
+    def check_existance_statement(self, llm_interaction: LLMInteractionEntity):
+        conditions = [
+            LLMInteractionModel.group_id == llm_interaction.group.id,
+            LLMInteractionModel.prompt_id == llm_interaction.prompt.id,
+            LLMInteractionModel.llm_service_id == llm_interaction.llm_service.id,
+        ]
+
+        # Add LLM parameters that affect the response
+        if llm_interaction.llm_parameters:
+            param_conditions = [
+                LLMInteractionModel.temperature == llm_interaction.llm_parameters.temperature,
+                LLMInteractionModel.max_completion_tokens == llm_interaction.llm_parameters.max_completion_tokens,
+                LLMInteractionModel.top_k == llm_interaction.llm_parameters.top_k,
+                LLMInteractionModel.top_p == llm_interaction.llm_parameters.top_p,
+                LLMInteractionModel.min_p == llm_interaction.llm_parameters.min_p,
+                LLMInteractionModel.top_a == llm_interaction.llm_parameters.top_a,
+                LLMInteractionModel.stop == llm_interaction.llm_parameters.stop,
+                LLMInteractionModel.n == llm_interaction.llm_parameters.n,
+                LLMInteractionModel.presence_penalty == llm_interaction.llm_parameters.presence_penalty,
+                LLMInteractionModel.frequency_penalty == llm_interaction.llm_parameters.frequency_penalty,
+                LLMInteractionModel.repitition_penalty == llm_interaction.llm_parameters.repitition_penalty,
+                LLMInteractionModel.seed == llm_interaction.llm_parameters.seed,
+            ]
+            # Only add non-None parameters to the conditions
+            conditions.extend([cond for cond in param_conditions if cond.right is not None])
+
+        return select(LLMInteractionModel).where(and_(*conditions))
+
+    async def create_many(self, llm_interactions: Iterable[LLMInteractionEntity]) -> bool:
+        """
+        Create multiple llm_interactions with their responses in a single transaction.
+        If any llm_interactions or response fails to save, the entire transaction is rolled back.
+
+        Args:
+            llm_interactions: List of llm_interactions entities to create
+
+        Returns:
+            bool: True if all entities were saved successfully, False otherwise
+        """
+        if not llm_interactions:
+            return True
+        try:
+            async with self.session() as session:
+                for interaction in llm_interactions:
+                    stmt = self.check_existance_statement(interaction)
+                    result = await session.execute(stmt)
+                    existing = result.scalar_one_or_none()
+
+                    if existing:
+                        interaction.id = existing.id
+                        if interaction.responses:
+                            for response in interaction.responses:
+                                session.add(response.to_model(llm_interaction=interaction))
+                        continue
+
+                    # Create interaction model
+                    interaction_model = interaction.to_model()
+                    session.add(interaction_model)
+                    await session.flush()
+
+                    # Create response models if they exist
+                    if interaction.responses:
+                        for response in interaction.responses:
+                            session.add(response.to_model(llm_interaction=interaction))
+            return True
+
+        except SQLAlchemyError as e:
+            logger.error(f"Database error while creating interactions: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error while creating interaction: {e}")
+            return False
+
+
+class LLMInteractionGroupRepository(Repository):
+    def check_existance_statement(self, llm_interaction_group: LLMInteractionGroupEntity):
+        return select(LLMInteractionGroupModel).where(
+            LLMInteractionGroupModel.task_id == llm_interaction_group.task.id,
+            LLMInteractionGroupModel.name == llm_interaction_group.name,
         )
 
 
@@ -191,5 +283,7 @@ repository.init_db_sync()
 llm_service_repository = LLMServiceRepository()
 dataset_repository = DatasetRepository()
 prompt_template_repository = PromptTemplateRepository()
+prompt_repository = PromptRepository()
 task_repository = TaskRepository()
 llm_interaction_group_repository = LLMInteractionGroupRepository()
+llm_interaction_repository = LLMInteractionRepository()

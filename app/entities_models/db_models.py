@@ -38,7 +38,9 @@ from app.entities_models.base import (
     LLMResponse,
     Evaluation,
     LLMService,
-    Task, LLMInteraction,
+    Task,
+    LLMInteraction,
+    LLMInteractionGroup,
 )
 
 
@@ -141,6 +143,9 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
     repitition_penalty: Optional[float] = Field(default=None, description="The repitition penalty")
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
     seed: Optional[int] = Field(default=None, description="The seed for the generation")
+    custom_params: Optional[str] = Field(
+        default=None, description="Custom parameters for the LLM service in JSON format"
+    )
 
     group: "LLMInteractionGroupModel" = Relationship(back_populates="llm_interactions")
     llm_responses: list["LLMResponseModel"] = Relationship(back_populates="llm_interaction")
@@ -175,6 +180,7 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
             "repitition_penalty": self.repitition_penalty,
             "end_user_id": self.end_user_id,
             "seed": self.seed,
+            "custom_params": json.loads(self.custom_params) if self.custom_params else None,
         }
         data["llm_parameters"] = LLMParametersEntity(**{k: v for k, v in llm_params_fields.items() if v is not None})
 
@@ -191,7 +197,7 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
         return self.entity(**data)
 
 
-class LLMInteractionGroupModel(LLMInteraction, ToEntityModel, table=True):
+class LLMInteractionGroupModel(LLMInteractionGroup, ToEntityModel, table=True):
     __tablename__ = "llm_interaction_group"
     __table_args__ = (Index("idx_unique_task_group_name", "task_id", "name", unique=True),)
     task_id: UUID = Field(foreign_key="task.id")

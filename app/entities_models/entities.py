@@ -14,7 +14,7 @@ before being used in the application.
 """
 import json
 from functools import cached_property
-from typing import Optional, Iterator, Any, TYPE_CHECKING, TypeVar
+from typing import Optional, Iterator, Any, TYPE_CHECKING, TypeVar, Union
 
 if TYPE_CHECKING:
     from app.entities_models.db_models import (
@@ -43,7 +43,8 @@ from app.entities_models.base import (
     MySQLModel,
     Evaluation,
     LLMService,
-    Task, LLMInteraction,
+    Task,
+    LLMInteraction,
 )
 
 
@@ -165,6 +166,9 @@ class LLMParametersEntity(MySQLModel, Entity):
     repitition_penalty: Optional[float] = Field(default=None, description="The repitition penalty")
     end_user_id: Optional[str] = Field(default=None, description="user id that represents the end user")
     seed: Optional[int] = Field(default=None, description="The seed for the generation")
+    custom_params: dict[str, Union[str, int, float, dict]] | None = Field(
+        default=None, description="Custom parameters for the llm service"
+    )
 
 
 class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
@@ -174,7 +178,9 @@ class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
 
     prompt: PromptEntity = Field(description="The prompt being sent to the llm service")
     llm_service: LLMService = Field(description="The llm_service that was used for the interaction")
-    group: "LLMInteractionGroupEntity" = Field(description="The llm interaction group that this interaction belongs to")
+    group: "LLMInteractionGroupEntity" = Field(
+        description="The llm interaction group that this interaction belongs to"
+    )
     llm_parameters: LLMParametersEntity | None = Field(
         default=None, description="The parameters used for the llm service call"
     )
@@ -192,7 +198,9 @@ class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
         data = self.model_dump(exclude={"prompt", "llm_parameters", "responses", "llm_service", "group", "task"})
 
         if self.llm_parameters:
-            data.update(self.llm_parameters.model_dump())
+            llm_parameters_data = self.llm_parameters.model_dump()
+            llm_parameters_data["custom_params"] = json.dumps(llm_parameters_data["custom_params"])
+            data.update(llm_parameters_data)
 
         # Add relationship IDs if they exist
         if self.prompt and self.prompt.id:
