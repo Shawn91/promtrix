@@ -81,7 +81,7 @@ class Repository:
                 db_model = await session.get(entity.model, entity.id)
 
             if db_model:
-                db_entity = db_model.to_entity()
+                db_entity = await db_model.to_entity()
                 for field in entity.model_fields:
                     if getattr(entity, field) is None and getattr(db_entity, field) is not None:
                         setattr(entity, field, getattr(db_entity, field))
@@ -307,7 +307,7 @@ class EvaluationRepository(Repository):
         async with self.session() as session:
             stmt = select(EvaluationModel).where(EvaluationModel.llm_response_id == llm_response.id)
             result = await session.execute(stmt)
-            return [model.to_entity() for model in result.scalars().all()]
+            return [await model.to_entity() for model in result.scalars().all()]
 
 
 class EvaluationGroupRepository(Repository):
