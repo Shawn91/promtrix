@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         DatasetModel,
         LLMInteractionGroupModel,
         TaskModel,
+        EvaluationGroupModel,
     )
 
 import datasets as HFDatasets
@@ -45,6 +46,8 @@ from app.entities_models.base import (
     LLMService,
     Task,
     LLMInteraction,
+    EvaluationGroup,
+    EvaluationStep,
 )
 
 
@@ -57,7 +60,7 @@ class ToModelEntity(SQLModel):
     def model(self):
         raise NotImplementedError()
 
-    def to_model(self):
+    def to_model(self, **kwargs):
         """Base conversion method from entity to model"""
         return self.model(**self.model_dump(exclude_unset=True))
 
@@ -115,7 +118,15 @@ class PromptEntity(Prompt, ToModelEntity, Entity):
 
 
 class LLMResponseEntity(LLMResponse, ToModelEntity, Entity):
-    evaluation: Optional["EvaluationEntity"] = None
+    evaluations: Optional[list["EvaluationEntity"]] = Field(
+        default=None,
+        description="The evaluations for this response. One response may be evaluated by various standards."
+        "For example, a response in json format may be evaluated by the correctness of the content in the json "
+        "and whether it is valid json format.",
+    )
+    # llm_interaction: Optional["LLMInteractionEntity"] = Field(
+    #     default=None, description="The llm interaction that this response belongs to"
+    # )
 
     @property
     def model(self) -> type["LLMResponseModel"]:
@@ -124,13 +135,21 @@ class LLMResponseEntity(LLMResponse, ToModelEntity, Entity):
         return LLMResponseModel
 
     def to_model(self, llm_interaction: "LLMInteractionEntity") -> "LLMResponseModel":
-        data = self.model_dump(exclude={"evaluation"})
+        data = self.model_dump(exclude={"evaluations", "llm_interaction"})
         data["llm_interaction_id"] = llm_interaction.id
         return self.model(**data)
 
 
+class EvaluationStepEntity(EvaluationStep, Entity):
+    ...
+
+
 class EvaluationEntity(Evaluation, ToModelEntity, Entity):
-    steps: list | None = Field(default=None, description="The steps taken to evaluate the response")
+    steps: list[EvaluationStepEntity] | None = Field(
+        default=None, description="The steps taken to evaluate the response"
+    )
+    group: "EvaluationGroupEntity" = Field(description="The evaluation group that this evaluation belongs to")
+    llm_response: "LLMResponseEntity" = Field(description="The response that this evaluation belongs to")
 
     @property
     def model(self) -> type["EvaluationModel"]:
@@ -139,7 +158,26 @@ class EvaluationEntity(Evaluation, ToModelEntity, Entity):
         return EvaluationModel
 
     def to_model(self) -> "EvaluationModel":
-        data = self.model_dump(exclude={"steps"})
+        data = self.model_dump(exclude={"steps, group", "llm_response"})
+        data["group_id"] = self.group.id
+        data["llm_response_id"] = self.llm_response.id
+        data["steps"] = json.dumps([step.model_dump() for step in self.steps])
+        return self.model(**data)
+
+
+class EvaluationGroupEntity(EvaluationGroup, ToModelEntity, Entity):
+    evaluations: list[EvaluationEntity] | None = None
+    llm_interaction_group: "LLMInteractionGroupEntity"
+
+    @property
+    def model(self) -> type["EvaluationGroupModel"]:
+        from app.entities_models.db_models import EvaluationGroupModel
+
+        return EvaluationGroupModel
+
+    def to_model(self) -> "EvaluationGroupModel":
+        data = self.model_dump(exclude={"evaluations", "llm_interaction_group"})
+        data["llm_interaction_group_id"] = self.llm_interaction_group.id
         return self.model(**data)
 
 
@@ -178,8 +216,11 @@ class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
 
     prompt: PromptEntity = Field(description="The prompt being sent to the llm service")
     llm_service: LLMService = Field(description="The llm_service that was used for the interaction")
-    group: "LLMInteractionGroupEntity" = Field(
-        description="The llm interaction group that this interaction belongs to"
+    group: Optional["LLMInteractionGroupEntity"] = Field(
+        default=None,
+        description="The llm interaction group that this interaction belongs to."
+        "If the interaction is for executing a task, an interaction group is required."
+        "If the interaction is for evaluating a response, an interaction group is not required.",
     )
     llm_parameters: LLMParametersEntity | None = Field(
         default=None, description="The parameters used for the llm service call"
@@ -188,6 +229,18 @@ class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
         default=None, description="The responses received from the llm service"
     )
 
+    def __init__(self, **data: Any):
+        super().__init__(**data)
+        if self.group:
+            self.add_group(self.group)
+
+    def add_group(self, group: "LLMInteractionGroupEntity"):
+        """Add a group to this interaction"""
+        self.group = group
+        if not self.group.llm_interactions:
+            self.group.llm_interactions = []
+        self.group.llm_interactions.append(self)
+
     @property
     def model(self) -> type["LLMInteractionModel"]:
         from app.entities_models.db_models import LLMInteractionModel
@@ -195,7 +248,7 @@ class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
         return LLMInteractionModel
 
     def to_model(self) -> "LLMInteractionModel":
-        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses", "llm_service", "group", "task"})
+        data = self.model_dump(exclude={"prompt", "llm_parameters", "responses", "llm_service", "group"})
 
         if self.llm_parameters:
             llm_parameters_data = self.llm_parameters.model_dump()

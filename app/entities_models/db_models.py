@@ -26,6 +26,7 @@ if TYPE_CHECKING:
         EvaluationEntity,
         DatasetEntity,
         TaskEntity,
+        EvaluationGroupEntity,
     )
 
 from sqlalchemy import Index
@@ -41,6 +42,10 @@ from app.entities_models.base import (
     Task,
     LLMInteraction,
     LLMInteractionGroup,
+    EvaluationGroup,
+    EvaluationMetric,
+    EvaluationMethod,
+    ResponseRole,
 )
 
 
@@ -50,8 +55,7 @@ class ToEntityModel(SQLModel):
         raise NotImplementedError()
 
     def to_entity(self):
-        """Base conversion method from model to entity"""
-        return self.entity(**self.model_dump())
+        raise NotImplementedError()
 
 
 class PromptTemplateModel(PromptTemplate, ToEntityModel, table=True):
@@ -60,7 +64,7 @@ class PromptTemplateModel(PromptTemplate, ToEntityModel, table=True):
 
     id: Optional[UUID] = Field(default=None, primary_key=True)
 
-    prompts: list["PromptModel"] = Relationship(back_populates="template")
+    prompts: list["PromptModel"] = Relationship(back_populates="template", sa_relationship_kwargs={"lazy": "selectin"})
 
     @property
     def entity(self):
@@ -79,8 +83,10 @@ class PromptModel(Prompt, ToEntityModel, table=True):
     id: UUID | None = Field(default=None, primary_key=True)
     template_id: UUID | None = Field(default=None, foreign_key="prompt_template.id")
 
-    template: PromptTemplateModel = Relationship(back_populates="prompts")
-    llm_interactions: list["LLMInteractionModel"] = Relationship(back_populates="prompt")
+    template: PromptTemplateModel = Relationship(back_populates="prompts", sa_relationship_kwargs={"lazy": "selectin"})
+    llm_interactions: list["LLMInteractionModel"] = Relationship(
+        back_populates="prompt", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self):
@@ -89,7 +95,7 @@ class PromptModel(Prompt, ToEntityModel, table=True):
         return PromptEntity
 
     def to_entity(self) -> "PromptEntity":
-        data = self.model_dump(exclude={"template", "llm_interactions"})
+        data = self.model_dump(exclude={"template", "llm_interactions", "template_id"})
         if self.template:
             data["template"] = self.template.to_entity()
         return self.entity(**data)
@@ -99,10 +105,13 @@ class LLMResponseModel(LLMResponse, ToEntityModel, table=True):
     __tablename__ = "llm_response"
 
     llm_interaction_id: UUID = Field(foreign_key="llm_interaction.id")
-    evaluation_id: UUID | None = Field(default=None, foreign_key="evaluation.id")
 
-    llm_interaction: "LLMInteractionModel" = Relationship(back_populates="llm_responses")
-    evaluation: "EvaluationModel" = Relationship(back_populates="llm_response")
+    llm_interaction: "LLMInteractionModel" = Relationship(
+        back_populates="llm_responses", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    evaluations: list["EvaluationModel"] = Relationship(
+        back_populates="llm_response", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self):
@@ -111,9 +120,15 @@ class LLMResponseModel(LLMResponse, ToEntityModel, table=True):
         return LLMResponseEntity
 
     def to_entity(self) -> "LLMResponseEntity":
-        data = self.model_dump(exclude={"llm_interaction", "evaluation"})
-        if self.evaluation:
-            data["evaluation"] = self.evaluation.to_entity()
+        data = self.model_dump(exclude={"llm_interaction", "evaluations", "llm_interaction_id"})
+        if isinstance(data["role"], str):
+            data["role"] = ResponseRole(data["role"])
+
+        if self.evaluations:
+            data["evaluations"] = [evaluation.to_entity() for evaluation in self.evaluations]
+        # if self.llm_interaction:
+        #     data["llm_interaction"] = self.llm_interaction.to_entity()
+
         return self.entity(**data)
 
 
@@ -147,10 +162,16 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
         default=None, description="Custom parameters for the LLM service in JSON format"
     )
 
-    group: "LLMInteractionGroupModel" = Relationship(back_populates="llm_interactions")
-    llm_responses: list["LLMResponseModel"] = Relationship(back_populates="llm_interaction")
-    prompt: PromptModel = Relationship(back_populates="llm_interactions")
-    llm_service: "LLMServiceModel" = Relationship(back_populates="llm_interactions")
+    group: "LLMInteractionGroupModel" = Relationship(
+        back_populates="llm_interactions", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    llm_responses: list["LLMResponseModel"] = Relationship(
+        back_populates="llm_interaction", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    prompt: PromptModel = Relationship(back_populates="llm_interactions", sa_relationship_kwargs={"lazy": "selectin"})
+    llm_service: "LLMServiceModel" = Relationship(
+        back_populates="llm_interactions", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self):
@@ -159,9 +180,10 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
         return LLMInteractionEntity
 
     def to_entity(self) -> "LLMInteractionEntity":
+        """
+        Convert to entity with option to include related entities.
+        """
         from app.entities_models.entities import LLMParametersEntity
-
-        data = self.model_dump(exclude={"group", "llm_responses", "prompt", "llm_service", "api_key", "task"})
 
         # Create LLMParametersEntity from the llm parameters fields
         llm_params_fields = {
@@ -182,6 +204,7 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
             "seed": self.seed,
             "custom_params": json.loads(self.custom_params) if self.custom_params else None,
         }
+        data = self.model_dump(exclude={"group", "llm_responses", "prompt", "llm_service", *llm_params_fields.keys()})
         data["llm_parameters"] = LLMParametersEntity(**{k: v for k, v in llm_params_fields.items() if v is not None})
 
         # Add related entities if they exist
@@ -201,8 +224,15 @@ class LLMInteractionGroupModel(LLMInteractionGroup, ToEntityModel, table=True):
     __tablename__ = "llm_interaction_group"
     __table_args__ = (Index("idx_unique_task_group_name", "task_id", "name", unique=True),)
     task_id: UUID = Field(foreign_key="task.id")
-    llm_interactions: list["LLMInteractionModel"] = Relationship(back_populates="group")
-    task: "TaskModel" = Relationship(back_populates="llm_interaction_groups")
+    llm_interactions: list["LLMInteractionModel"] = Relationship(
+        back_populates="group", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    task: "TaskModel" = Relationship(
+        back_populates="llm_interaction_groups", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    evalution_groups: list["EvaluationGroupModel"] = Relationship(
+        back_populates="llm_interaction_group", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self):
@@ -212,6 +242,8 @@ class LLMInteractionGroupModel(LLMInteractionGroup, ToEntityModel, table=True):
 
     def to_entity(self) -> "LLMInteractionGroupEntity":
         data = self.model_dump(exclude={"llm_interactions"})
+        if self.task:
+            data["task"] = self.task.to_entity()
         if self.llm_interactions:
             data["llm_interactions"] = [interaction.to_entity() for interaction in self.llm_interactions]
         return self.entity(**data)
@@ -220,7 +252,16 @@ class LLMInteractionGroupModel(LLMInteractionGroup, ToEntityModel, table=True):
 class EvaluationModel(Evaluation, ToEntityModel, table=True):
     __tablename__ = "evaluation"
 
-    llm_response: LLMResponseModel = Relationship(back_populates="evaluation")
+    group_id: UUID = Field(foreign_key="evaluation_group.id")
+    llm_response_id: UUID = Field(foreign_key="llm_response.id")
+    steps: str | None = Field(default=None, description="The steps taken to evaluate the response serialised as JSON")
+
+    llm_response: LLMResponseModel = Relationship(
+        back_populates="evaluations", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    group: "EvaluationGroupModel" = Relationship(
+        back_populates="evaluations", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self):
@@ -229,10 +270,46 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
         return EvaluationEntity
 
     def to_entity(self) -> "EvaluationEntity":
+        from app.entities_models.entities import EvaluationStepEntity
+
         data = self.model_dump(exclude={"llm_response"})
+        if isinstance(data["metric"], str):
+            data["metric"] = EvaluationMetric(data["metric"])
+        if self.steps:
+            steps_data = json.loads(self.steps)
+            for step in steps_data:
+                if isinstance(step["method"], str):
+                    step["method"] = EvaluationMethod(step["method"])
+            data["steps"] = [EvaluationStepEntity(**s) for s in steps_data]
         return self.entity(**data)
 
-    # evaluation_group: Optional["EvaluationGroup"] = Relationship(back_populates="evaluations")
+
+class EvaluationGroupModel(EvaluationGroup, ToEntityModel, table=True):
+    """Normally, an llm interaction group as an execution of a task should correspond to an evaluation group."""
+
+    __tablename__ = "evaluation_group"
+    llm_interaction_group_id: UUID = Field(foreign_key="llm_interaction_group.id")
+
+    evaluations: list["EvaluationModel"] = Relationship(
+        back_populates="group", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+    llm_interaction_group: "LLMInteractionGroupModel" = Relationship(
+        back_populates="evalution_groups", sa_relationship_kwargs={"lazy": "selectin"}
+    )
+
+    @property
+    def entity(self):
+        from app.entities_models.entities import EvaluationGroupEntity
+
+        return EvaluationGroupEntity
+
+    def to_entity(self) -> "EvaluationGroupEntity":
+        data = self.model_dump(exclude={"evaluations", "llm_interaction_group"})
+        if self.evaluations:
+            data["evaluations"] = [evaluation.to_entity() for evaluation in self.evaluations]
+        if self.llm_interaction_group:
+            data["llm_interaction_group"] = self.llm_interaction_group.to_entity()
+        return self.entity(**data)
 
 
 class DatasetModel(Dataset, ToEntityModel, table=True):
@@ -243,11 +320,11 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
 
     # Define the relationship to child datasets
     children: list["DatasetModel"] = Relationship(
-        back_populates="parent", sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+        back_populates="parent", sa_relationship_kwargs={"cascade": "all, delete-orphan", "lazy": "selectin"}
     )
     # Define the relationship to parent dataset
     parent: Optional["DatasetModel"] = Relationship(
-        back_populates="children", sa_relationship_kwargs={"remote_side": "[DatasetModel.id]"}
+        back_populates="children", sa_relationship_kwargs={"remote_side": "[DatasetModel.id]", "lazy": "selectin"}
     )
 
     @property
@@ -273,7 +350,9 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
         default=None, description="Custom configuration for the LLM service in JSON format"
     )
 
-    llm_interactions: list["LLMInteractionModel"] = Relationship(back_populates="llm_service")
+    llm_interactions: list["LLMInteractionModel"] = Relationship(
+        back_populates="llm_service", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self):
@@ -290,7 +369,9 @@ class LLMServiceModel(LLMService, ToEntityModel, table=True):
 
 class TaskModel(Task, ToEntityModel, table=True):
     __tablename__ = "task"
-    llm_interaction_groups: list["LLMInteractionGroupModel"] = Relationship(back_populates="task")
+    llm_interaction_groups: list["LLMInteractionGroupModel"] = Relationship(
+        back_populates="task", sa_relationship_kwargs={"lazy": "selectin"}
+    )
 
     @property
     def entity(self) -> Type["TaskEntity"]:
@@ -300,6 +381,4 @@ class TaskModel(Task, ToEntityModel, table=True):
 
     def to_entity(self) -> "TaskEntity":
         data = self.model_dump(exclude={"llm_interaction_groups"})
-        if self.llm_interaction_groups:
-            data["llm_interaction_groups"] = [group.to_entity() for group in self.llm_interaction_groups]
         return self.entity(**data)

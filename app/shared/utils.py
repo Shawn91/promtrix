@@ -5,7 +5,13 @@ from typing import Iterable, TypeVar, Union, Iterator, Tuple, Awaitable, Optiona
 T = TypeVar("T")
 
 
-def iterate(iterable: Iterable[T], start: int = 0, enumerate_items: bool = False) -> Iterator[Union[T, Tuple[int, T]]]:
+def iterate(
+    iterable: Iterable[T],
+    start: int = 0,
+    enumerate_items: bool = False,
+    desc: str | None = None,
+    total: int | None = None,
+) -> Iterator[Union[T, Tuple[int, T]]]:
     """
     Creates an iterator that uses tqdm if available, otherwise falls back to regular iteration.
     Supports optional enumeration of items.
@@ -21,7 +27,7 @@ def iterate(iterable: Iterable[T], start: int = 0, enumerate_items: bool = False
     try:
         from tqdm import tqdm
 
-        iterator = tqdm(iterable)
+        iterator = tqdm(iterable, desc=desc, total=total)
     except ImportError:
         iterator = iterable
 
@@ -30,7 +36,9 @@ def iterate(iterable: Iterable[T], start: int = 0, enumerate_items: bool = False
     return iterator
 
 
-async def asyncio_gather(*tasks: Awaitable[T], return_exceptions: bool = False) -> list[T]:
+async def asyncio_gather(
+    *tasks: Awaitable[T], return_exceptions: bool = False, desc: str | None = None, total: int | None = None
+) -> list[T]:
     """
     Gathers awaitables with a progress bar when tqdm is available,
     otherwise falls back to regular asyncio.gather.
@@ -45,7 +53,7 @@ async def asyncio_gather(*tasks: Awaitable[T], return_exceptions: bool = False) 
     try:
         from tqdm.asyncio import tqdm_asyncio
 
-        return await tqdm_asyncio.gather(*tasks)
+        return await tqdm_asyncio.gather(*tasks, desc=desc, total=total)
     except ImportError:
         return await asyncio.gather(*tasks, return_exceptions=return_exceptions)
 

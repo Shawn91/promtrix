@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from app.config import Config
+from app.entities_models.base import EvaluationMetric, EvaluationMethod
 from app.entities_models.entities import (
     PromptEntity,
     LLMResponseEntity,
@@ -53,10 +54,11 @@ async def evaluate_by_llm(prompt: PromptEntity, response: LLMResponseEntity) -> 
     score = 1 if evaluate_answer_interaction.responses[0].content.lower().strip(".") == "correct" else 0
     duration = (datetime.now() - start).microseconds
     evaluation = EvaluationEntity(
-        method="evaluate_answer_by_llm",
+        method=EvaluationMethod.LLM,
         score=score,
         duration=duration,
         cost=evaluate_answer_interaction.cost,
+        metric=EvaluationMetric.CORRECTNESS,
         steps=[evaluate_answer_interaction],
     )
     response.evaluation = evaluation

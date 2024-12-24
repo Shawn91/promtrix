@@ -10,6 +10,7 @@ from datasets import (
 from litellm import completion_cost
 
 from app.config import PROJECT_ROOT
+from app.entities_models.base import ResponseRole
 from app.entities_models.entities import (
     DatasetEntity,
     PromptTemplateEntity,
@@ -18,6 +19,8 @@ from app.entities_models.entities import (
     LLMInteractionEntity,
     LLMInteractionGroupEntity,
     LLMParametersEntity,
+    LLMServiceEntity,
+    TaskEntity,
 )
 from app.shared.utils import asyncio_gather
 
@@ -41,6 +44,7 @@ def generate_prompt(
     prompt_templates: list[PromptTemplateEntity] | None = None,
     template_variables: list[dict[str, str]] | None = None,
     dataset: DatasetEntity | None = None,
+    expected_response_key: str = "output",
 ) -> Iterator[PromptEntity]:
     assert (
         template_variables is not None or dataset is not None
@@ -53,9 +57,7 @@ def generate_prompt(
     if dataset is not None:
         template_variables = iter(dataset)
     for prompt_template, variables in product(prompt_templates, template_variables):
-        expected_response = None
-        if variables.get("output"):
-            expected_response = ExpectedResponseEntity(content=variables["output"])
+        expected_response = variables.pop(expected_response_key, None)
         yield prompt_template.generate_prompt(user=variables, expected_response=expected_response)
 
 
@@ -65,7 +67,7 @@ def create_llm_interaction_entity(
     reponse_entities = [
         LLMResponseEntity(
             content=choice.message.content,
-            role=choice.message.role,
+            role=ResponseRole(choice.message.role),
             finish_reason=choice.finish_reason,
             index=choice.index,
         )
