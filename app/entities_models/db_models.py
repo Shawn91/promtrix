@@ -129,6 +129,8 @@ class LLMResponseModel(LLMResponse, ToEntityModel, table=True):
         entity = self.entity(**data)
         if "evaluations" in data:
             entity.evaluations = data["evaluations"]
+            for evaluation in entity.evaluations:
+                evaluation.llm_response = entity
         return entity
 
 
@@ -287,15 +289,13 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
         if exclude_fields is None:
             exclude_fields = []
 
-        data = self.model_dump(exclude={"llm_response", "group_id", "llm_response_id", *exclude_fields})
+        data = self.model_dump(exclude={"llm_response", "group_id", "llm_response_id", "group", *exclude_fields})
         if isinstance(data["metric"], str):
             data["metric"] = EvaluationMetric(data["metric"])
         if "llm_response" not in exclude_fields:
             data["llm_response"] = await (await self.awaitable_attrs.llm_response).to_entity(
                 exclude_fields=["evaluations"]
             )
-        if "group" not in exclude_fields:
-            data["group"] = await (await self.awaitable_attrs.group).to_entity()
         if self.steps:
             steps_data = json.loads(self.steps)
             for step in steps_data:
@@ -307,10 +307,7 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
             if data["llm_response"].evaluations is None:
                 data["llm_response"].evaluations = []
             data["llm_response"].evaluations.append(entity)
-        if "group" in data:
-            if data["group"].evaluations is None:
-                data["group"].evaluations = []
-            data["group"].evaluations.append(entity)
+            entity.llm_response = data["llm_response"]
         return entity
 
 
@@ -345,6 +342,7 @@ class EvaluationGroupModel(EvaluationGroup, ToEntityModel, table=True):
         if "evaluations" in data:
             for evaluation in data["evaluations"]:
                 evaluation["group"] = entity
+            entity.evaluations = data["evaluations"]
         return entity
 
 

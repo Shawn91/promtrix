@@ -5,7 +5,7 @@ from typing import AsyncGenerator, Iterable
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import or_, select, and_, SQLModel
+from sqlmodel import or_, select, and_
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import Config
@@ -88,7 +88,7 @@ class Repository:
                 return entity
             return None
 
-    async def create(self, entity: ToModelEntityType) -> bool:
+    async def create(self, entity: ToModelEntityType, **to_model_kwargs) -> bool:
         """
         Create a new model corresponding to the given entity in the database.
 
@@ -98,9 +98,9 @@ class Repository:
         Returns:
             bool: True if successfully created, False if already exists
         """
-        return await self.create_many([entity])
+        return await self.create_many([entity], **to_model_kwargs)
 
-    async def create_many(self, entities: Iterable[ToModelEntityType]) -> bool:
+    async def create_many(self, entities: Iterable[ToModelEntityType], **to_model_kwargs) -> bool:
         """
         Create multiple new models corresponding to the given entities in the database.
         Skips entities that already exist and saves the remaining ones.
@@ -131,7 +131,7 @@ class Repository:
                             entity.id = existing.id
                             continue
 
-                    model = entity.to_model()
+                    model = entity.to_model(**to_model_kwargs)
                     session.add(model)
 
                 # Attempt to save all new entities
