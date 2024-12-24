@@ -148,8 +148,12 @@ class EvaluationEntity(Evaluation, ToModelEntity, Entity):
     steps: list[EvaluationStepEntity] | None = Field(
         default=None, description="The steps taken to evaluate the response"
     )
-    group: "EvaluationGroupEntity" = Field(description="The evaluation group that this evaluation belongs to")
-    llm_response: "LLMResponseEntity" = Field(description="The response that this evaluation belongs to")
+    group: Optional["EvaluationGroupEntity"] = Field(
+        default=None, description="The evaluation group that this evaluation belongs to"
+    )
+    llm_response: Optional["LLMResponseEntity"] = Field(
+        default=None, description="The response that this evaluation belongs to"
+    )
 
     @property
     def model(self) -> type["EvaluationModel"]:
@@ -158,10 +162,14 @@ class EvaluationEntity(Evaluation, ToModelEntity, Entity):
         return EvaluationModel
 
     def to_model(self) -> "EvaluationModel":
-        data = self.model_dump(exclude={"steps, group", "llm_response"})
+        data = self.model_dump(exclude={"steps", "group", "llm_response"})
         data["group_id"] = self.group.id
         data["llm_response_id"] = self.llm_response.id
-        data["steps"] = json.dumps([step.model_dump() for step in self.steps])
+        if self.steps:
+            steps = [step.model_dump() for step in self.steps]
+            for step in steps:
+                step["execution_id"] = str(step["execution_id"])
+            data["steps"] = json.dumps(steps)
         return self.model(**data)
 
 

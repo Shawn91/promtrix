@@ -312,7 +312,14 @@ class EvaluationRepository(Repository):
 
 class EvaluationGroupRepository(Repository):
     def check_existance_statement(self, entity: ToModelEntityType):
-        return None
+        conditions = []
+        if entity.name:
+            conditions.append(EvaluationGroupModel.name == entity.name)
+        if entity.llm_interaction_group:
+            conditions.append(EvaluationGroupModel.llm_interaction_group_id == entity.llm_interaction_group.id)
+        if not conditions:
+            return None
+        return select(EvaluationGroupModel).where(and_(*conditions))
 
 
 # Create a single repository instance

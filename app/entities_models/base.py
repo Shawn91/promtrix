@@ -190,6 +190,7 @@ class EvaluationGroup(MySQLModel):
     """
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
+    name: str = Field(description="The name of the group")
     created_at: datetime = Field(
         default_factory=datetime.now, description="The date and time when the group was created"
     )

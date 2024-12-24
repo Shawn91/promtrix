@@ -114,16 +114,22 @@ class LLMResponseModel(LLMResponse, ToEntityModel, table=True):
 
         return LLMResponseEntity
 
-    async def to_entity(self) -> "LLMResponseEntity":
-        data = self.model_dump(exclude={"llm_interaction", "evaluations", "llm_interaction_id"})
+    async def to_entity(self, exclude_fields: list | None = None) -> "LLMResponseEntity":
+        if exclude_fields is None:
+            exclude_fields = []
+        data = self.model_dump(exclude={"llm_interaction", "evaluations", "llm_interaction_id", *exclude_fields})
         if isinstance(data["role"], str):
             data["role"] = ResponseRole(data["role"])
 
-        if await self.awaitable_attrs.evaluations:
+        if "evaluations" not in exclude_fields and await self.awaitable_attrs.evaluations:
             data["evaluations"] = [
-                await evaluation.to_entity() for evaluation in await self.awaitable_attrs.evaluations
+                await evaluation.to_entity(exclude_fields=["llm_response"])
+                for evaluation in await self.awaitable_attrs.evaluations
             ]
-        return self.entity(**data)
+        entity = self.entity(**data)
+        if "evaluations" in data:
+            entity.evaluations = data["evaluations"]
+        return entity
 
 
 class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
@@ -275,25 +281,44 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
 
         return EvaluationEntity
 
-    async def to_entity(self) -> "EvaluationEntity":
+    async def to_entity(self, exclude_fields: list | None = None) -> "EvaluationEntity":
         from app.entities_models.entities import EvaluationStepEntity
 
-        data = self.model_dump(exclude={"llm_response"})
+        if exclude_fields is None:
+            exclude_fields = []
+
+        data = self.model_dump(exclude={"llm_response", "group_id", "llm_response_id", *exclude_fields})
         if isinstance(data["metric"], str):
             data["metric"] = EvaluationMetric(data["metric"])
+        if "llm_response" not in exclude_fields:
+            data["llm_response"] = await (await self.awaitable_attrs.llm_response).to_entity(
+                exclude_fields=["evaluations"]
+            )
+        if "group" not in exclude_fields:
+            data["group"] = await (await self.awaitable_attrs.group).to_entity()
         if self.steps:
             steps_data = json.loads(self.steps)
             for step in steps_data:
                 if isinstance(step["method"], str):
                     step["method"] = EvaluationMethod(step["method"])
             data["steps"] = [EvaluationStepEntity(**s) for s in steps_data]
-        return self.entity(**data)
+        entity = self.entity(**data)
+        if "llm_response" in data:
+            if data["llm_response"].evaluations is None:
+                data["llm_response"].evaluations = []
+            data["llm_response"].evaluations.append(entity)
+        if "group" in data:
+            if data["group"].evaluations is None:
+                data["group"].evaluations = []
+            data["group"].evaluations.append(entity)
+        return entity
 
 
 class EvaluationGroupModel(EvaluationGroup, ToEntityModel, table=True):
     """Normally, an llm interaction group as an execution of a task should correspond to an evaluation group."""
 
     __tablename__ = "evaluation_group"
+    __table_args__ = (Index("idx_unique_interaction_group_name", "llm_interaction_group_id", "name", unique=True),)
     llm_interaction_group_id: UUID = Field(foreign_key="llm_interaction_group.id")
 
     evaluations: list["EvaluationModel"] = Relationship(back_populates="group")
@@ -305,15 +330,22 @@ class EvaluationGroupModel(EvaluationGroup, ToEntityModel, table=True):
 
         return EvaluationGroupEntity
 
-    async def to_entity(self) -> "EvaluationGroupEntity":
-        data = self.model_dump(exclude={"evaluations", "llm_interaction_group"})
-        if await self.awaitable_attrs.evaluations:
+    async def to_entity(self, exclude_fields: list | None = None) -> "EvaluationGroupEntity":
+        if exclude_fields is None:
+            exclude_fields = []
+        data = self.model_dump(exclude={"evaluations", "llm_interaction_group", *exclude_fields})
+        if "evaluations" not in exclude_fields and await self.awaitable_attrs.evaluations:
             data["evaluations"] = [
-                await evaluation.to_entity() for evaluation in await self.awaitable_attrs.evaluations
+                await evaluation.to_entity(exclude_fields=["group"])
+                for evaluation in await self.awaitable_attrs.evaluations
             ]
         if await self.awaitable_attrs.llm_interaction_group:
             data["llm_interaction_group"] = await self.llm_interaction_group.to_entity()
-        return self.entity(**data)
+        entity = self.entity(**data)
+        if "evaluations" in data:
+            for evaluation in data["evaluations"]:
+                evaluation["group"] = entity
+        return entity
 
 
 class DatasetModel(Dataset, ToEntityModel, table=True):
