@@ -260,9 +260,9 @@ class LLMInteractionRepository(Repository):
 
                         if existing:
                             interaction.id = existing.id
-                            if interaction.responses:
-                                for response in interaction.responses:
-                                    session.add(response.to_model())
+                            # if interaction.responses:
+                            #     for response in interaction.responses:
+                            #         session.add(response.to_model(llm_interaction=interaction))
                             continue
 
                     # Create interaction model
