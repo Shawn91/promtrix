@@ -82,6 +82,7 @@ class Repository:
 
             if db_model:
                 db_entity = await db_model.to_entity()
+                entity.id = db_entity.id
                 for field in entity.model_fields:
                     if getattr(entity, field) is None and getattr(db_entity, field) is not None:
                         setattr(entity, field, getattr(db_entity, field))
@@ -128,7 +129,12 @@ class Repository:
                         result = await session.execute(stmt)
                         existing = result.scalar_one_or_none()
                         if existing:
+                            # Update entity with database data
+                            db_entity = await existing.to_entity()
                             entity.id = existing.id
+                            for field in entity.model_fields:
+                                if getattr(entity, field) is None and getattr(db_entity, field) is not None:
+                                    setattr(entity, field, getattr(db_entity, field))
                             continue
 
                     model = entity.to_model(**to_model_kwargs)
@@ -154,9 +160,8 @@ class Repository:
 
 class LLMServiceRepository(Repository):
     def check_existance_statement(self, llm_service: LLMServiceEntity):
-        conditions = []
-        if llm_service.llm is not None:  # Make this optional too
-            conditions.append(LLMServiceModel.llm == llm_service.llm)
+        assert llm_service.llm is not None
+        conditions = [LLMServiceModel.llm == llm_service.llm]
         if llm_service.llm_version is not None:
             conditions.append(LLMServiceModel.llm_version == llm_service.llm_version)
         if llm_service.quantization is not None:
@@ -169,19 +174,14 @@ class LLMServiceRepository(Repository):
 
 class DatasetRepository(Repository):
     def check_existance_statement(self, dataset: DatasetEntity):
-        conditions = []
-        if dataset.raw_dataset_dir:
-            conditions.append(DatasetModel.raw_dataset_dir == dataset.raw_dataset_dir)
-        if dataset.name and dataset.version:
-            conditions.append(and_(DatasetModel.name == dataset.name, DatasetModel.version == dataset.version))
-
-        if not conditions:
-            return None
+        assert dataset.raw_dataset_dir is not None
+        conditions = [DatasetModel.raw_dataset_dir == dataset.raw_dataset_dir]
         return select(DatasetModel).where(or_(*conditions))
 
 
 class PromptTemplateRepository(Repository):
     def check_existance_statement(self, prompt_template: PromptTemplateEntity):
+        assert prompt_template.user is not None
         conditions = [PromptTemplateModel.user == prompt_template.user]
         if prompt_template.system is not None:
             conditions.append(PromptTemplateModel.system == prompt_template.system)
@@ -203,38 +203,35 @@ class TaskRepository(Repository):
 
 class LLMInteractionRepository(Repository):
     def check_existance_statement(self, llm_interaction: LLMInteractionEntity):
-        conditions = []
-
-        if llm_interaction.group and llm_interaction.group.id:
-            conditions.append(LLMInteractionModel.group_id == llm_interaction.group.id)
-        if llm_interaction.prompt and llm_interaction.prompt.id:
-            conditions.append(LLMInteractionModel.prompt_id == llm_interaction.prompt.id)
-        if llm_interaction.llm_service and llm_interaction.llm_service.id:
-            conditions.append(LLMInteractionModel.llm_service_id == llm_interaction.llm_service.id)
+        assert llm_interaction.group is not None
+        assert llm_interaction.prompt is not None
+        assert llm_interaction.llm_service is not None
+        assert llm_interaction.llm_parameters is not None
+        conditions = [
+            LLMInteractionModel.group_id == llm_interaction.group.id,
+            LLMInteractionModel.prompt_id == llm_interaction.prompt.id,
+            LLMInteractionModel.llm_service_id == llm_interaction.llm_service.id,
+        ]
 
         # Add LLM parameters that affect the response
-        if llm_interaction.llm_parameters:
-            param_mapping = {
-                "temperature": llm_interaction.llm_parameters.temperature,
-                "max_completion_tokens": llm_interaction.llm_parameters.max_completion_tokens,
-                "top_k": llm_interaction.llm_parameters.top_k,
-                "top_p": llm_interaction.llm_parameters.top_p,
-                "min_p": llm_interaction.llm_parameters.min_p,
-                "top_a": llm_interaction.llm_parameters.top_a,
-                "stop": llm_interaction.llm_parameters.stop,
-                "n": llm_interaction.llm_parameters.n,
-                "presence_penalty": llm_interaction.llm_parameters.presence_penalty,
-                "frequency_penalty": llm_interaction.llm_parameters.frequency_penalty,
-                "repitition_penalty": llm_interaction.llm_parameters.repitition_penalty,
-                "seed": llm_interaction.llm_parameters.seed,
-            }
+        param_mapping = {
+            "temperature": llm_interaction.llm_parameters.temperature,
+            "max_completion_tokens": llm_interaction.llm_parameters.max_completion_tokens,
+            "top_k": llm_interaction.llm_parameters.top_k,
+            "top_p": llm_interaction.llm_parameters.top_p,
+            "min_p": llm_interaction.llm_parameters.min_p,
+            "top_a": llm_interaction.llm_parameters.top_a,
+            "stop": llm_interaction.llm_parameters.stop,
+            "n": llm_interaction.llm_parameters.n,
+            "presence_penalty": llm_interaction.llm_parameters.presence_penalty,
+            "frequency_penalty": llm_interaction.llm_parameters.frequency_penalty,
+            "repitition_penalty": llm_interaction.llm_parameters.repitition_penalty,
+            "seed": llm_interaction.llm_parameters.seed,
+        }
 
-            for param_name, param_value in param_mapping.items():
-                if param_value is not None:
-                    conditions.append(getattr(LLMInteractionModel, param_name) == param_value)
-
-        if not conditions:
-            return None
+        for param_name, param_value in param_mapping.items():
+            if param_value is not None:
+                conditions.append(getattr(LLMInteractionModel, param_name) == param_value)
         return select(LLMInteractionModel).where(and_(*conditions))
 
     async def create_many(self, llm_interactions: Iterable[LLMInteractionEntity]) -> bool:
@@ -259,10 +256,12 @@ class LLMInteractionRepository(Repository):
                         existing = result.scalar_one_or_none()
 
                         if existing:
+                            # Update entity with database data
+                            db_entity = await existing.to_entity()
                             interaction.id = existing.id
-                            # if interaction.responses:
-                            #     for response in interaction.responses:
-                            #         session.add(response.to_model(llm_interaction=interaction))
+                            for field in interaction.model_fields:
+                                if getattr(interaction, field) is None and getattr(db_entity, field) is not None:
+                                    setattr(interaction, field, getattr(db_entity, field))
                             continue
 
                     # Create interaction model
@@ -286,14 +285,11 @@ class LLMInteractionRepository(Repository):
 
 class LLMInteractionGroupRepository(Repository):
     def check_existance_statement(self, llm_interaction_group: LLMInteractionGroupEntity):
-        conditions = []
-        if llm_interaction_group.task and llm_interaction_group.task.id:
-            conditions.append(LLMInteractionGroupModel.task_id == llm_interaction_group.task.id)
-        if llm_interaction_group.name:
-            conditions.append(LLMInteractionGroupModel.name == llm_interaction_group.name)
-
-        if not conditions:
-            return None
+        assert llm_interaction_group.task is not None and llm_interaction_group.name is not None
+        conditions = [
+            LLMInteractionGroupModel.task_id == llm_interaction_group.task.id,
+            LLMInteractionGroupModel.name == llm_interaction_group.name,
+        ]
         return select(LLMInteractionGroupModel).where(and_(*conditions))
 
 
@@ -312,13 +308,11 @@ class EvaluationRepository(Repository):
 
 class EvaluationGroupRepository(Repository):
     def check_existance_statement(self, entity: ToModelEntityType):
-        conditions = []
-        if entity.name:
-            conditions.append(EvaluationGroupModel.name == entity.name)
-        if entity.llm_interaction_group:
-            conditions.append(EvaluationGroupModel.llm_interaction_group_id == entity.llm_interaction_group.id)
-        if not conditions:
-            return None
+        assert entity.name is not None and entity.llm_interaction_group is not None
+        conditions = [
+            EvaluationGroupModel.name == entity.name,
+            EvaluationGroupModel.llm_interaction_group_id == entity.llm_interaction_group.id,
+        ]
         return select(EvaluationGroupModel).where(and_(*conditions))
 
 

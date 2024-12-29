@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Optional
 from uuid import UUID, uuid4
 
+from pydantic import ConfigDict
 from sqlmodel import Field, SQLModel
 
 
@@ -41,8 +42,7 @@ class ResponseRole(str, Enum):
 
 
 class MySQLModel(SQLModel, table=False):
-    class Config:
-        extra = "forbid"
+    model_config = ConfigDict(extra="forbid")
 
 
 class PromptTemplate(MySQLModel, table=False):
@@ -184,7 +184,7 @@ class Evaluation(MySQLModel, table=False):
     cost: Optional[float] = Field(default=None, description="The cost of the evaluation")
 
 
-class EvaluationGroup(MySQLModel):
+class EvaluationGroup(MySQLModel, table=False):
     """
     Represents a group of Evaluation objects that were performed together.
     """
@@ -198,7 +198,7 @@ class EvaluationGroup(MySQLModel):
     cost: Optional[float] = Field(default=None)
 
 
-class Dataset(MySQLModel):
+class Dataset(MySQLModel, table=False):
     """
     Represents a dataset used for testing or evaluating a model or a prompt
     """
@@ -207,6 +207,7 @@ class Dataset(MySQLModel):
     name: str = Field(
         description="The name of the dataset. If this is a subdataset, just include the name of the subdataset",
     )
+    raw_dataset_dir: str = Field(description="The path to the directory containing the raw dataset")
     version: str | None = Field(default=None, description="The version of the dataset")
     description: str | None = None
     url: str | None = None

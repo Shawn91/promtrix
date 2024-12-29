@@ -151,6 +151,9 @@ class EvaluationEntity(Evaluation, ToModelEntity, Entity):
     llm_response: Optional["LLMResponseEntity"] = Field(
         default=None, description="The response that this evaluation belongs to"
     )
+    group: Optional["EvaluationGroupEntity"] = Field(
+        default=None, description="The group that this evaluation belongs to"
+    )
 
     @property
     def model(self) -> type["EvaluationModel"]:
@@ -288,13 +291,12 @@ class LLMInteractionGroupEntity(LLMInteractionGroup, ToModelEntity, Entity):
         return self.model(**data)
 
 
-class DatasetEntity(Dataset, ToModelEntity, Entity):
+class DatasetEntity(Dataset, ToModelEntity, Entity, table=False):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    raw_dataset_dir: str = Field(description="The path to the directory containing the raw dataset")
     parent: Optional["DatasetEntity"] = None
     children: Optional[dict[str, "DatasetEntity"]] = None  # Can contain both subdatasets and splits
-    raw_dataset: HFDatasets.Dataset | None = None
+    raw_dataset: HFDatasets.Dataset | HFDatasets.DatasetDict | None = None
 
     def __iter__(self) -> Iterator[dict]:
         """

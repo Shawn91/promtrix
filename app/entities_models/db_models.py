@@ -12,8 +12,11 @@ Data retrieved from external systems should be Models and then converted to Enti
 before being used in the application.
 """
 import json
+from pathlib import Path
 from typing import Optional, TYPE_CHECKING, Type
 from uuid import UUID
+
+from datasets import load_from_disk, DatasetDict as HFDatasetDict
 
 if TYPE_CHECKING:
     from app.entities_models.entities import (
@@ -219,19 +222,20 @@ class LLMInteractionModel(LLMInteraction, ToEntityModel, table=True):
 
         # Add related entities if they exist
         if "prompt" not in exclude_fields and await self.awaitable_attrs.prompt:
-            data["prompt"] = await self.prompt.to_entity()
+            data["prompt"] = await (await self.awaitable_attrs.prompt).to_entity()
         if "llm_responses" not in exclude_fields and await self.awaitable_attrs.llm_responses:
             data["responses"] = [await response.to_entity() for response in await self.awaitable_attrs.llm_responses]
         if "llm_service" not in exclude_fields and await self.awaitable_attrs.llm_service:
-            data["llm_service"] = await self.llm_service.to_entity()
+            data["llm_service"] = await (await self.awaitable_attrs.llm_service).to_entity()
         if "group" not in exclude_fields and await self.awaitable_attrs.group:
-            data["group"] = await self.group.to_entity(exclude_fields=["llm_interactions"])
+            data["group"] = await (await self.awaitable_attrs.group).to_entity(exclude_fields=["llm_interactions"])
 
         entity = self.entity(**data)
         if "group" in data:
-            if data["group"].llm_interactions is None:
-                data["group"].llm_interactions = []
-            data["group"].llm_interactions.append(entity)
+            if entity.group.llm_interactions is None:
+                entity.group.llm_interactions = []
+            if entity.id not in [llm_interaction.id for llm_interaction in entity.group.llm_interactions]:
+                entity.group.llm_interactions.append(entity)
         return entity
 
 
@@ -252,9 +256,9 @@ class LLMInteractionGroupModel(LLMInteractionGroup, ToEntityModel, table=True):
     async def to_entity(self, exclude_fields: list | None = None) -> "LLMInteractionGroupEntity":
         if exclude_fields is None:
             exclude_fields = []
-        data = self.model_dump(exclude={"llm_interactions", "task_id", *exclude_fields})
+        data = self.model_dump(exclude={"llm_interactions", "task_id", "task", "evaluation_groups", *exclude_fields})
         if "task" not in exclude_fields and await self.awaitable_attrs.task:
-            data["task"] = await self.task.to_entity()
+            data["task"] = await (await self.awaitable_attrs.task).to_entity(exclude_fields=["llm_interaction_groups"])
         if "llm_interactions" not in exclude_fields and await self.awaitable_attrs.llm_interactions:
             data["llm_interactions"] = [
                 await interaction.to_entity(exclude_fields=["group"])
@@ -263,7 +267,8 @@ class LLMInteractionGroupModel(LLMInteractionGroup, ToEntityModel, table=True):
         entity = self.entity(**data)
         if "llm_interactions" in data:
             for interaction in data["llm_interactions"]:
-                interaction["group"] = entity
+                interaction.group = entity
+
         return entity
 
 
@@ -292,10 +297,12 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
         data = self.model_dump(exclude={"llm_response", "group_id", "llm_response_id", "group", *exclude_fields})
         if isinstance(data["metric"], str):
             data["metric"] = EvaluationMetric(data["metric"])
-        if "llm_response" not in exclude_fields:
+        if "llm_response" not in exclude_fields and await self.awaitable_attrs.llm_response:
             data["llm_response"] = await (await self.awaitable_attrs.llm_response).to_entity(
                 exclude_fields=["evaluations"]
             )
+        if "group" not in exclude_fields and await self.awaitable_attrs.group:
+            data["group"] = await self.group.to_entity(exclude_fields=["evaluations"])
         if self.steps:
             steps_data = json.loads(self.steps)
             for step in steps_data:
@@ -308,6 +315,11 @@ class EvaluationModel(Evaluation, ToEntityModel, table=True):
                 data["llm_response"].evaluations = []
             data["llm_response"].evaluations.append(entity)
             entity.llm_response = data["llm_response"]
+        if "group" in data:
+            if not entity.group.evaluations:
+                entity.group.evaluations = []
+            if entity.id not in [e.id for e in entity.group.evaluations]:
+                entity.group.evaluations.append(entity)
         return entity
 
 
@@ -330,18 +342,20 @@ class EvaluationGroupModel(EvaluationGroup, ToEntityModel, table=True):
     async def to_entity(self, exclude_fields: list | None = None) -> "EvaluationGroupEntity":
         if exclude_fields is None:
             exclude_fields = []
-        data = self.model_dump(exclude={"evaluations", "llm_interaction_group", *exclude_fields})
+        data = self.model_dump(
+            exclude={"evaluations", "llm_interaction_group", "llm_interaction_group_id", *exclude_fields}
+        )
         if "evaluations" not in exclude_fields and await self.awaitable_attrs.evaluations:
             data["evaluations"] = [
                 await evaluation.to_entity(exclude_fields=["group"])
                 for evaluation in await self.awaitable_attrs.evaluations
             ]
         if await self.awaitable_attrs.llm_interaction_group:
-            data["llm_interaction_group"] = await self.llm_interaction_group.to_entity()
+            data["llm_interaction_group"] = await (await self.awaitable_attrs.llm_interaction_group).to_entity()
         entity = self.entity(**data)
         if "evaluations" in data:
             for evaluation in data["evaluations"]:
-                evaluation["group"] = entity
+                evaluation.group = entity
             entity.evaluations = data["evaluations"]
         return entity
 
@@ -350,8 +364,6 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
     __tablename__ = "dataset"
 
     parent_id: UUID | None = Field(default=None, foreign_key="dataset.id")
-    raw_dataset_dir: str = Field(description="The path to the directory containing the raw dataset ", unique=True)
-
     # Define the relationship to child datasets
     children: list["DatasetModel"] = Relationship(
         back_populates="parent", sa_relationship_kwargs={"cascade": "all, delete-orphan", "lazy": "selectin"}
@@ -367,13 +379,36 @@ class DatasetModel(Dataset, ToEntityModel, table=True):
 
         return DatasetEntity
 
-    async def to_entity(self) -> "DatasetEntity":
-        data = self.model_dump(exclude={"parent", "children"})
-        if await self.awaitable_attrs.parent:
-            data["parent"] = await self.parent.to_entity()
-        if await self.awaitable_attrs.children:
-            data["children"] = {child.name: await child.to_entity() for child in await self.awaitable_attrs.children}
-        return self.entity(**data)
+    async def to_entity(self, exclude_fields: list | None = None) -> "DatasetEntity":
+        if exclude_fields is None:
+            exclude_fields = []
+        data = self.model_dump(exclude={"parent", "children", "parent_id", *exclude_fields})
+        if "parent" not in exclude_fields and await self.awaitable_attrs.parent:
+            data["parent"] = await (await self.awaitable_attrs.parent).to_entity(exclude_fields=["children"])
+        if "children" not in exclude_fields and await self.awaitable_attrs.children:
+            data["children"] = {
+                self.name: await child.to_entity(exclude_fields=["parent"])
+                for child in await self.awaitable_attrs.children
+            }
+
+        if await self.awaitable_attrs.raw_dataset_dir:
+            try:
+                raw_dataset = load_from_disk(Path(await self.awaitable_attrs.raw_dataset_dir))
+                if isinstance(raw_dataset, HFDatasetDict) and self.name in raw_dataset:
+                    raw_dataset = raw_dataset[self.name]
+                data["raw_dataset"] = raw_dataset
+            except Exception:
+                # some datasets' raw_dataset_dir is not real, it's ok to skip it
+                ...
+        entity = self.entity(**data)
+        if entity.parent:
+            if entity.parent.children is None:
+                entity.parent.children = {}
+            entity.parent.children[entity.name] = entity
+        if "children" in data:
+            for child in data["children"].values():
+                child.parent = entity
+        return entity
 
 
 class LLMServiceModel(LLMService, ToEntityModel, table=True):
@@ -411,4 +446,11 @@ class TaskModel(Task, ToEntityModel, table=True):
 
     async def to_entity(self) -> "TaskEntity":
         data = self.model_dump(exclude={"llm_interaction_groups"})
-        return self.entity(**data)
+        task_entity = self.entity(**data)
+        for llm_interaction_group in await self.awaitable_attrs.llm_interaction_groups:
+            llm_interaction_group_entity = await llm_interaction_group.to_entity(exclude_fields=["task"])
+            llm_interaction_group_entity.task = task_entity
+            if task_entity.llm_interaction_groups is None:
+                task_entity.llm_interaction_groups = []
+            task_entity.llm_interaction_groups.append(llm_interaction_group_entity)
+        return task_entity
