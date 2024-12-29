@@ -444,13 +444,16 @@ class TaskModel(Task, ToEntityModel, table=True):
 
         return TaskEntity
 
-    async def to_entity(self) -> "TaskEntity":
-        data = self.model_dump(exclude={"llm_interaction_groups"})
+    async def to_entity(self, exclude_fields: list | None = None) -> "TaskEntity":
+        if exclude_fields is None:
+            exclude_fields = []
+        data = self.model_dump(exclude={"llm_interaction_groups", *exclude_fields})
         task_entity = self.entity(**data)
-        for llm_interaction_group in await self.awaitable_attrs.llm_interaction_groups:
-            llm_interaction_group_entity = await llm_interaction_group.to_entity(exclude_fields=["task"])
-            llm_interaction_group_entity.task = task_entity
-            if task_entity.llm_interaction_groups is None:
-                task_entity.llm_interaction_groups = []
-            task_entity.llm_interaction_groups.append(llm_interaction_group_entity)
+        if await self.awaitable_attrs.llm_interaction_groups:
+            for llm_interaction_group in await self.awaitable_attrs.llm_interaction_groups:
+                llm_interaction_group_entity = await llm_interaction_group.to_entity(exclude_fields=["task"])
+                llm_interaction_group_entity.task = task_entity
+                if task_entity.llm_interaction_groups is None:
+                    task_entity.llm_interaction_groups = []
+                task_entity.llm_interaction_groups.append(llm_interaction_group_entity)
         return task_entity

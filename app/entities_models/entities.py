@@ -275,7 +275,7 @@ class LLMInteractionEntity(LLMInteraction, ToModelEntity, Entity):
 
 
 class LLMInteractionGroupEntity(LLMInteractionGroup, ToModelEntity, Entity):
-    task: Task = Field(description="The task that was solved by the LLM interaction")
+    task: Task | None = Field(default=None, description="The task that was solved by the LLM interaction")
     llm_interactions: list[LLMInteractionEntity] | None = None
 
     @property

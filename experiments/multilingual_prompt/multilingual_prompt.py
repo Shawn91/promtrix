@@ -8,6 +8,7 @@ from datasets import (
     load_from_disk,
 )
 from litellm import completion_cost
+from nicegui import ui
 
 from app.config import PROJECT_ROOT, Config
 from app.entities_models.base import LLMInteractionCategory, EvaluationMetric, EvaluationMethod
@@ -334,7 +335,7 @@ Just answer "Correct" or "Incorrect" without any explanations.
 
     async def evaluate_llm_interaction_group_by_llm(
         self, group_name: str, llm_interaction_group: LLMInteractionGroupEntity, evaluate_batch_size=10
-    ):
+    ) -> EvaluationGroupEntity:
         evaluation_group = EvaluationGroupEntity(
             name=group_name,
             llm_interaction_group=llm_interaction_group,
@@ -364,6 +365,7 @@ Just answer "Correct" or "Incorrect" without any explanations.
                     for interaction in pending_evaluations
                 ]
             )
+        return evaluation_group
 
 
 async def run_llm_interaction(llm_interaction: LLMInteractionEntity):
@@ -418,7 +420,9 @@ async def run_llm_interaction(llm_interaction: LLMInteractionEntity):
     return llm_interaction
 
 
-async def execute_task(group_name: str, llm_interaction_batch_size=10):
+async def execute_task(
+    group_name: str, llm_interaction_batch_size=10
+) -> Tuple[LLMInteractionGroupEntity, EvaluationGroupEntity]:
     task_entity = await create_task()
     llm_interaction_group_entity = await create_llm_interaction_group(task_entity, group_name)
     dataset_entity = await load_dataset()
@@ -456,19 +460,57 @@ async def execute_task(group_name: str, llm_interaction_batch_size=10):
     # Process any remaining interactions
     if pending_interactions:
         await asyncio.gather(*[run_llm_interaction(interaction) for interaction in pending_interactions])
-    await evaluator.evaluate_llm_interaction_group_by_llm(
+    evaluation_group = await evaluator.evaluate_llm_interaction_group_by_llm(
         group_name=group_name,
         llm_interaction_group=llm_interaction_group_entity,
         evaluate_batch_size=llm_interaction_batch_size,
     )
+    return llm_interaction_group_entity, evaluation_group
 
 
-if __name__ == "__main__":
+class ResultPresenter:
+    def __init__(self, llm_interaction_group: LLMInteractionGroupEntity, evaluation_group: EvaluationGroupEntity):
+        self.columns = [
+            {"name": "ID", "label": "ID", "field": "id", "align": "left"},
+            {"name": "LLM", "label": "LLM", "field": "llm", "align": "left"},
+            {"name": "SystemPrompt", "label": "System Prompt", "field": "system prompt", "align": "left"},
+            {"name": "UserPrompt", "label": "User Prompt", "field": "user prompt", "align": "left"},
+            {"name": "Response", "label": "Response", "field": "response", "align": "left"},
+            {"name": "Evaluation", "label": "Evaluation", "field": "evaluation", "align": "left"},
+        ]
+        self.data = ResultPresenter.create_data(llm_interaction_group, evaluation_group)
+
+    @staticmethod
+    def create_data(llm_interaction_group: LLMInteractionGroupEntity, evaluation_group: EvaluationGroupEntity):
+        evaluation_ids = {e.id for e in evaluation_group.evaluations}
+        data = []
+        for interaction in llm_interaction_group.llm_interactions:
+            for response in interaction.responses:
+                evaluation = [e for e in response.evaluations if e.id in evaluation_ids][0]
+                data.append(
+                    {
+                        "id": response.id,
+                        "llm": interaction.llm_service.llm,
+                        "system prompt": interaction.prompt.system,
+                        "user prompt": interaction.prompt.user,
+                        "response": response.content,
+                        "evaluation": evaluation.llm_response.content,
+                    }
+                )
+        return data
+
+    def render(self):
+        ui.table(columns=self.columns, rows=self.data, row_key="id")
+
+
+if __name__ in ["__main__"]:
     # download_dataset()
     async def main():
         await llm_service_repository.create(
             EVALUATION_LLM_SERVICE,
         )
-        await execute_task("1", llm_interaction_batch_size=3)
+        llm_interaction_group, evaluation_group = await execute_task("1", llm_interaction_batch_size=3)
+        # ResultPresenter(llm_interaction_group, evaluation_group).render()
+        # ui.run()
 
     asyncio.run(main())
