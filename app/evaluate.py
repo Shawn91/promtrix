@@ -1,8 +1,8 @@
 from datetime import datetime
 
 from app.config import Config
-from app.entities_models.base import EvaluationMetric, EvaluationMethod
-from app.entities_models.entities import (
+from app.models.base import EvaluationMetric, EvaluationMethod
+from app.models.entities import (
     PromptEntity,
     LLMResponseEntity,
     PromptTemplateEntity,

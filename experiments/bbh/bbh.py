@@ -9,7 +9,7 @@ from litellm.types.utils import ModelResponse
 from nicegui import ui
 
 from app.config import Config, PROJECT_ROOT
-from app.entities_models.entities import PromptEntity, LLMInteractionGroupEntity
+from app.models.entities import PromptEntity, LLMInteractionGroupEntity
 from app.evaluate import evaluate_group_by_llm
 from app.shared.utils import asyncio_gather
 from app.task_execution import create_llm_interaction_entity

@@ -1,57 +1,86 @@
 import asyncio
 import sys
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Iterable
+from pathlib import Path
+from typing import AsyncGenerator, Type, Tuple, Dict, Optional, TypeVar, Iterable
+from uuid import UUID
 
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import create_async_engine
-from sqlmodel import or_, select, and_
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncEngine
+from sqlmodel import select, and_, SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.config import Config
-from app.entities_models.db_models import *
-from app.entities_models.entities import (
-    PromptEntity,
-    LLMServiceEntity,
-    ToModelEntityType,
-    DatasetEntity,
-    PromptTemplateEntity,
-    TaskEntity,
-    LLMInteractionGroupEntity,
-    LLMInteractionEntity,
-    LLMResponseEntity,
-    EvaluationEntity,
+from app.models.db_models import (
+    MyModel,
+    LLMServiceModel,
+    DatasetModel,
+    PromptTemplateModel,
+    PromptModel,
+    TaskModel,
+    LLMInteractionModel,
+    LLMInteractionGroupModel,
+    EvaluationModel,
+    EvaluationGroupModel,
 )
 from app.shared.utils import logger
 
+ModelType = TypeVar("ModelType", bound=MyModel)
 
-class Repository:
-    def __init__(self):
-        self._engine = create_async_engine(f"sqlite+aiosqlite:///{Config.DATABASE_PATH}", echo=False)
+
+class RepositoryManager:
+    """Manages database engine and repositories"""
+
+    _instance: Optional["RepositoryManager"] = None
+    _engine: Optional[AsyncEngine] = None
+    _repositories: Dict[Type[MyModel], "Repository"] = {}
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    @classmethod
+    def get_instance(cls) -> "RepositoryManager":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def set_engine(self, db_path: Path | str):
+        """Set a new engine (useful for testing with different databases)"""
+        self._engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}", echo=False)
+
+    @property
+    def engine(self) -> AsyncEngine:
+        if self._engine is None:
+            raise RuntimeError("Database engine not initialized")
+        return self._engine
 
     async def init_db(self):
-        async with self._engine.begin() as conn:
+        """Initialize the database schema"""
+        async with self.engine.begin() as conn:
             await conn.run_sync(SQLModel.metadata.create_all)
 
-    def init_db_sync(self):
+    def init_db_sync(self, db_path: Path | None = None):
         """Synchronous wrapper to initialize database"""
+        if not db_path:
+            db_path = Config.DATABASE_PATH
+        self.set_engine(db_path=db_path)
         try:
-            # Get or create an event loop
             if sys.platform == "win32":
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
             else:
                 loop = asyncio.get_event_loop()
-
-            # Run the async init_db
             loop.run_until_complete(self.init_db())
         except Exception as e:
             logger.error(f"Failed to initialize database: {e}")
             raise
 
     @asynccontextmanager
-    async def session(self) -> AsyncGenerator[AsyncSession, None]:
-        async with AsyncSession(self._engine) as session:
+    async def transaction(self) -> AsyncGenerator[AsyncSession, None]:
+        """Provides a transactional context"""
+        async with AsyncSession(self.engine) as session:
             try:
                 yield session
                 await session.commit()
@@ -61,271 +90,243 @@ class Repository:
             finally:
                 await session.close()
 
-    async def get(self, entity: ToModelEntityType) -> ToModelEntityType | None:
-        """
-        Get an entity from the database. If found, updates the entity's ID with the database ID.
+    @classmethod
+    def register_repository(cls, repository: "Repository"):
+        """Register a repository for a specific model type"""
+        cls._repositories[repository.model] = repository
 
-        Args:
-            entity: The entity to find in the database
+    def get_repository(self, model_type: Type[ModelType]) -> "Repository":
+        """Get the repository for a specific model type"""
+        if model_type not in self._repositories:
+            raise ValueError(f"No repository registered for model type {model_type}")
+        return self._repositories[model_type]
 
-        Returns:
-            The entity with updated ID if found, None otherwise
-        """
-        async with self.session() as session:
-            # First try to find by unique combination
-            stmt = self.check_existance_statement(entity)
-            result = await session.execute(stmt)
-            db_model = result.scalar_one_or_none()
-            if not db_model and entity.id:
-                # If not found by unique combination, try to find by ID
-                db_model = await session.get(entity.model, entity.id)
+    async def get(self, model: ModelType, session: Optional[AsyncSession] = None) -> ModelType | None:
+        """Get a model using its appropriate repository"""
+        repository = self.get_repository(type(model))
+        if session:
+            return await repository.get(model=model, session=session)
+        else:
+            with self.transaction() as session:
+                return await repository.get(model=model, session=session)
 
-            if db_model:
-                db_entity = await db_model.to_entity()
-                entity.id = db_entity.id
-                for field in entity.model_fields:
-                    if getattr(entity, field) is None and getattr(db_entity, field) is not None:
-                        setattr(entity, field, getattr(db_entity, field))
-                return entity
-            return None
+    async def save(self, model: ModelType, session: Optional[AsyncSession] = None) -> Tuple[ModelType, bool]:
+        """Save a model using its appropriate repository"""
+        repository = self.get_repository(type(model))
+        if session:
+            return await repository.save(model=model, session=session)
+        else:
+            with self.transaction() as session:
+                return await repository.save(model=model, session=session)
 
-    async def create(self, entity: ToModelEntityType, **to_model_kwargs) -> bool:
-        """
-        Create a new model corresponding to the given entity in the database.
+    async def save_many(
+        self, models: Iterable[ModelType], session: Optional[AsyncSession] = None
+    ) -> list[Tuple[ModelType, bool]]:
+        models = list(models)
+        assert all(isinstance(model, type(models[0])) for model in models)
+        repository = self.get_repository(type(models[0]))
+        if session:
+            return await repository.save_many(models=models, session=session)
+        async with self.transaction() as session:
+            return await repository.save_many(models=models, session=session)
 
-        Args:
-            entity: The entity to create
+    async def refresh(self, model: ModelType, session: AsyncSession | None = None):
+        if session:
+            await session.refresh(model)
+        else:
+            with self.transaction() as session:
+                await self.refresh(model=model, session=session)
 
-        Returns:
-            bool: True if successfully created, False if already exists
-        """
-        return await self.create_many([entity], **to_model_kwargs)
 
-    async def create_many(self, entities: Iterable[ToModelEntityType], **to_model_kwargs) -> bool:
-        """
-        Create multiple new models corresponding to the given entities in the database.
-        Skips entities that already exist and saves the remaining ones.
-        If any entity fails to save, all new entities are rolled back.
+class Repository:
+    @property
+    def model(self) -> Type[MyModel]:
+        raise NotImplementedError()
 
-        Args:
-            entities: List of entities to create. All entities must be of the same type.
-
-        Returns:
-            True if all entities were saved successfully, False if any entity failed to save.
-        """
-        if not entities:
-            return True
-        first_entity = None
-        try:
-            async with self.session() as session:
-                for entity in entities:
-                    if not first_entity:
-                        first_entity = entity
-                    assert isinstance(
-                        entity, type(first_entity)
-                    ), f"All entities must be of the same type. Expected: {type(first_entity)} but got {type(entity)}"
-                    stmt = self.check_existance_statement(entity)
-                    if stmt is not None:
-                        result = await session.execute(stmt)
-                        existing = result.scalar_one_or_none()
-                        if existing:
-                            # Update entity with database data
-                            db_entity = await existing.to_entity()
-                            entity.id = existing.id
-                            for field in entity.model_fields:
-                                if getattr(entity, field) is None and getattr(db_entity, field) is not None:
-                                    setattr(entity, field, getattr(db_entity, field))
-                            continue
-
-                    model = entity.to_model(**to_model_kwargs)
-                    session.add(model)
-
-                # Attempt to save all new entities
+    async def get(self, model: ModelType, session: AsyncSession) -> ModelType | None:
+        """get the corresponding model in database and update it with the given model parameter."""
+        db_model = None
+        if model.id:
+            db_model = await session.get(type(model), model.id)
+        else:
+            stmt = self.check_existence_statement(model)
+            if stmt is not None:
+                result = await session.execute(stmt)
+                db_model = result.scalar_one_or_none()
+        if db_model:
+            model.id = db_model.id
+            # update model data in the database
+            try:
+                db_model = await session.merge(model)
                 await session.flush()
-            return True
+            except SQLAlchemyError as e:
+                logger.error(f"Database error while updating model of type {type(model)}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error while updating model of type {type(model)}: {e}")
+                raise
+        return db_model
 
-        except SQLAlchemyError as e:
-            # Handle specific database errors
-            logger.error(f"Database error while creating models for entities {type(first_entity)}: {e}")
-            # Session rollback is handled by context manager
-            return False
-        except Exception as e:
-            # Handle unexpected errors
-            logger.error(f"Unexpected error while creating models for entities {type(first_entity)}: {e}")
-            return False
+    async def save(self, model: ModelType, session: AsyncSession) -> Tuple[ModelType, bool]:
+        """save a model into database with session passed as parameter
+        The second returned value of type bool indicates whether the model is new or not
+        """
+        existed_model = await self.get(model=model, session=session)
+        if existed_model:
+            return existed_model, False
+        else:
+            try:
+                session.add(model)
+                await session.flush()
+                return model, True
+            except SQLAlchemyError as e:
+                logger.error(f"Database error while saving new model of type {type(model)}: {e}")
+                raise
+            except Exception as e:
+                logger.error(f"Unexpected error while saving new model of type {type(model)}: {e}")
+                raise
 
-    def check_existance_statement(self, entity: ToModelEntityType):
+    async def save_many(
+        self, models: Iterable[ModelType], session: AsyncSession | None = None
+    ) -> list[Tuple[ModelType, bool]]:
+        return await asyncio.gather(*[self.save(model=model, session=session) for model in models])
+
+    def check_existence_statement(self, model: ModelType):
         raise NotImplementedError()
 
 
 class LLMServiceRepository(Repository):
-    def check_existance_statement(self, llm_service: LLMServiceEntity):
-        assert llm_service.llm is not None
-        conditions = [LLMServiceModel.llm == llm_service.llm]
-        if llm_service.llm_version is not None:
-            conditions.append(LLMServiceModel.llm_version == llm_service.llm_version)
-        if llm_service.quantization is not None:
-            conditions.append(LLMServiceModel.quantization == llm_service.quantization)
+    @property
+    def model(self) -> Type[LLMServiceModel]:
+        return LLMServiceModel
 
-        if not conditions:
-            return None
+    def check_existence_statement(self, model: LLMServiceModel):
+        assert model.llm is not None
+        conditions = [LLMServiceModel.llm == model.llm]
+        if model.llm_version is not None:
+            conditions.append(LLMServiceModel.llm_version == model.llm_version)
+        if model.quantization is not None:
+            conditions.append(LLMServiceModel.quantization == model.quantization)
         return select(LLMServiceModel).where(and_(*conditions))
 
 
 class DatasetRepository(Repository):
-    def check_existance_statement(self, dataset: DatasetEntity):
-        assert dataset.raw_dataset_dir is not None
-        conditions = [DatasetModel.raw_dataset_dir == dataset.raw_dataset_dir]
-        return select(DatasetModel).where(or_(*conditions))
+    @property
+    def model(self) -> Type[DatasetModel]:
+        return DatasetModel
+
+    def check_existence_statement(self, model: DatasetModel):
+        assert model.raw_dataset_dir is not None
+        return select(DatasetModel).where(DatasetModel.raw_dataset_dir == model.raw_dataset_dir)
 
 
 class PromptTemplateRepository(Repository):
-    def check_existance_statement(self, prompt_template: PromptTemplateEntity):
-        assert prompt_template.user is not None
-        conditions = [PromptTemplateModel.user == prompt_template.user]
-        if prompt_template.system is not None:
-            conditions.append(PromptTemplateModel.system == prompt_template.system)
+    @property
+    def model(self) -> Type[PromptTemplateModel]:
+        return PromptTemplateModel
+
+    def check_existence_statement(self, model: PromptTemplateModel):
+        assert model.user is not None
+        conditions = [PromptTemplateModel.user == model.user]
+        if model.system is not None:
+            conditions.append(PromptTemplateModel.system == model.system)
         return select(PromptTemplateModel).where(and_(*conditions))
 
 
 class PromptRepository(Repository):
-    def check_existance_statement(self, prompt: PromptEntity):
-        conditions = [PromptModel.user == prompt.user]
-        if prompt.system is not None:
-            conditions.append(PromptModel.system == prompt.system)
+    @property
+    def model(self) -> Type[PromptModel]:
+        return PromptModel
+
+    def check_existence_statement(self, model: PromptModel):
+        assert model.user is not None
+        conditions = [PromptModel.user == model.user]
+        if model.system is not None:
+            conditions.append(PromptModel.system == model.system)
         return select(PromptModel).where(and_(*conditions))
 
 
 class TaskRepository(Repository):
-    def check_existance_statement(self, task: TaskEntity):
-        return select(TaskModel).where(TaskModel.name == task.name)
+    @property
+    def model(self) -> Type[TaskModel]:
+        return TaskModel
+
+    def check_existence_statement(self, model: TaskModel):
+        assert model.name is not None
+        return select(TaskModel).where(TaskModel.name == model.name)
 
 
 class LLMInteractionRepository(Repository):
-    def check_existance_statement(self, llm_interaction: LLMInteractionEntity):
-        assert llm_interaction.group is not None
-        assert llm_interaction.prompt is not None
-        assert llm_interaction.llm_service is not None
-        assert llm_interaction.llm_parameters is not None
+    @property
+    def model(self) -> Type[LLMInteractionModel]:
+        return LLMInteractionModel
+
+    def check_existence_statement(self, model: LLMInteractionModel):
+        assert model.group_id is not None
+        assert model.prompt_id is not None
+        assert model.llm_service_id is not None
+        assert model.llm_params_id is not None
         conditions = [
-            LLMInteractionModel.group_id == llm_interaction.group.id,
-            LLMInteractionModel.prompt_id == llm_interaction.prompt.id,
-            LLMInteractionModel.llm_service_id == llm_interaction.llm_service.id,
+            LLMInteractionModel.group_id == model.group_id,
+            LLMInteractionModel.prompt_id == model.prompt_id,
+            LLMInteractionModel.llm_service_id == model.llm_service_id,
+            LLMInteractionModel.llm_params_id == model.llm_params_id,
         ]
-
-        # Add LLM parameters that affect the response
-        param_mapping = {
-            "temperature": llm_interaction.llm_parameters.temperature,
-            "max_completion_tokens": llm_interaction.llm_parameters.max_completion_tokens,
-            "top_k": llm_interaction.llm_parameters.top_k,
-            "top_p": llm_interaction.llm_parameters.top_p,
-            "min_p": llm_interaction.llm_parameters.min_p,
-            "top_a": llm_interaction.llm_parameters.top_a,
-            "stop": llm_interaction.llm_parameters.stop,
-            "n": llm_interaction.llm_parameters.n,
-            "presence_penalty": llm_interaction.llm_parameters.presence_penalty,
-            "frequency_penalty": llm_interaction.llm_parameters.frequency_penalty,
-            "repitition_penalty": llm_interaction.llm_parameters.repitition_penalty,
-            "seed": llm_interaction.llm_parameters.seed,
-        }
-
-        for param_name, param_value in param_mapping.items():
-            if param_value is not None:
-                conditions.append(getattr(LLMInteractionModel, param_name) == param_value)
         return select(LLMInteractionModel).where(and_(*conditions))
-
-    async def create_many(self, llm_interactions: Iterable[LLMInteractionEntity]) -> bool:
-        """
-        Create multiple llm_interactions with their responses in a single transaction.
-        If any llm_interactions or response fails to save, the entire transaction is rolled back.
-
-        Args:
-            llm_interactions: List of llm_interactions entities to create
-
-        Returns:
-            bool: True if all entities were saved successfully, False otherwise
-        """
-        if not llm_interactions:
-            return True
-        try:
-            async with self.session() as session:
-                for interaction in llm_interactions:
-                    stmt = self.check_existance_statement(interaction)
-                    if stmt is not None:
-                        result = await session.execute(stmt)
-                        existing = result.scalar_one_or_none()
-
-                        if existing:
-                            # Update entity with database data
-                            db_entity = await existing.to_entity()
-                            interaction.id = existing.id
-                            for field in interaction.model_fields:
-                                if getattr(interaction, field) is None and getattr(db_entity, field) is not None:
-                                    setattr(interaction, field, getattr(db_entity, field))
-                            continue
-
-                    # Create interaction model
-                    interaction_model = interaction.to_model()
-                    session.add(interaction_model)
-                    await session.flush()
-
-                    # Create response models if they exist
-                    if interaction.responses:
-                        for response in interaction.responses:
-                            session.add(response.to_model(llm_interaction=interaction))
-            return True
-
-        except SQLAlchemyError as e:
-            logger.error(f"Database error while creating interactions: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error while creating interaction: {e}")
-            return False
 
 
 class LLMInteractionGroupRepository(Repository):
-    def check_existance_statement(self, llm_interaction_group: LLMInteractionGroupEntity):
-        assert llm_interaction_group.task is not None and llm_interaction_group.name is not None
-        conditions = [
-            LLMInteractionGroupModel.task_id == llm_interaction_group.task.id,
-            LLMInteractionGroupModel.name == llm_interaction_group.name,
-        ]
-        return select(LLMInteractionGroupModel).where(and_(*conditions))
+    @property
+    def model(self) -> Type[LLMInteractionGroupModel]:
+        return LLMInteractionGroupModel
+
+    def check_existence_statement(self, model: LLMInteractionGroupModel):
+        assert model.task_id is not None and model.name is not None
+        return select(LLMInteractionGroupModel).where(
+            and_(LLMInteractionGroupModel.task_id == model.task_id, LLMInteractionGroupModel.name == model.name)
+        )
 
 
 class EvaluationRepository(Repository):
-    def check_existance_statement(self, entity: ToModelEntityType):
-        """Evaluations can't be identified by unique combination, so this method is not implemented"""
+    @property
+    def model(self) -> Type[EvaluationModel]:
+        return EvaluationModel
+
+    def check_existence_statement(self, model: EvaluationModel):
         return None
 
-    async def find_by_llm_response(self, llm_response: LLMResponseEntity) -> list[EvaluationEntity]:
-        """Find all evaluations for a given llm_response"""
+    async def find_by_llm_response(self, llm_response_id: UUID) -> list[EvaluationModel]:
         async with self.session() as session:
-            stmt = select(EvaluationModel).where(EvaluationModel.llm_response_id == llm_response.id)
+            stmt = select(EvaluationModel).where(EvaluationModel.llm_response_id == llm_response_id)
             result = await session.execute(stmt)
-            return [await model.to_entity() for model in result.scalars().all()]
+            return list(result.scalars().all())
 
 
 class EvaluationGroupRepository(Repository):
-    def check_existance_statement(self, entity: ToModelEntityType):
-        assert entity.name is not None and entity.llm_interaction_group is not None
-        conditions = [
-            EvaluationGroupModel.name == entity.name,
-            EvaluationGroupModel.llm_interaction_group_id == entity.llm_interaction_group.id,
-        ]
-        return select(EvaluationGroupModel).where(and_(*conditions))
+    @property
+    def model(self) -> Type[EvaluationGroupModel]:
+        return EvaluationGroupModel
+
+    def check_existence_statement(self, model: EvaluationGroupModel):
+        assert model.name is not None and model.llm_interaction_group_id is not None
+        return select(EvaluationGroupModel).where(
+            and_(
+                EvaluationGroupModel.name == model.name,
+                EvaluationGroupModel.llm_interaction_group_id == model.llm_interaction_group_id,
+            )
+        )
 
 
 # Create a single repository instance
-repository = Repository()
-repository.init_db_sync()
-
-llm_service_repository = LLMServiceRepository()
-dataset_repository = DatasetRepository()
-prompt_template_repository = PromptTemplateRepository()
-prompt_repository = PromptRepository()
-task_repository = TaskRepository()
-llm_interaction_group_repository = LLMInteractionGroupRepository()
-llm_interaction_repository = LLMInteractionRepository()
-evaluation_repository = EvaluationRepository()
-evaluation_group_repository = EvaluationGroupRepository()
+# repository = Repository()
+# repository.init_db_sync()
+#
+RepositoryManager.register_repository(repository=LLMServiceRepository())
+RepositoryManager.register_repository(repository=DatasetRepository())
+RepositoryManager.register_repository(repository=PromptTemplateRepository())
+RepositoryManager.register_repository(repository=PromptRepository())
+RepositoryManager.register_repository(repository=TaskRepository())
+RepositoryManager.register_repository(repository=LLMInteractionRepository())
+RepositoryManager.register_repository(repository=LLMInteractionGroupRepository())
+RepositoryManager.register_repository(repository=EvaluationRepository())
+RepositoryManager.register_repository(repository=EvaluationGroupRepository())

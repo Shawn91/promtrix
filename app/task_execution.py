@@ -10,8 +10,8 @@ from datasets import (
 from litellm import completion_cost
 
 from app.config import PROJECT_ROOT
-from app.entities_models.base import ResponseRole
-from app.entities_models.entities import (
+from app.models.base import ResponseRole
+from app.models.entities import (
     DatasetEntity,
     PromptTemplateEntity,
     PromptEntity,
