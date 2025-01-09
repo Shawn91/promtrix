@@ -1,13 +1,14 @@
 from datetime import datetime
 from enum import Enum
 from functools import cached_property
-from typing import Optional, TypedDict, TypeVar, Literal, Iterator
-from uuid import UUID
+from typing import Optional, TypeVar, Literal, Iterator
+from uuid import UUID, uuid4
 
+from typing_extensions import TypedDict
 from datasets import load_from_disk, Dataset as HFDataset, DatasetDict as HFDatasetDict
 from jinja2 import Template
 from pydantic import ConfigDict
-from sqlalchemy import Index, Column, Enum as SQLAlchemyEnum, JSON
+from sqlalchemy import Index, Column, Enum as SQLAlchemyEnum, JSON, func
 from sqlalchemy.ext.asyncio import AsyncAttrs
 from sqlmodel import Field, Relationship, SQLModel
 
@@ -42,7 +43,7 @@ class ResponseRole(str, Enum):
 class MyModel(SQLModel, AsyncAttrs):
     """Base class for all database models."""
 
-    id: Optional[UUID] = Field(default=None, primary_key=True)
+    id: UUID = Field(default=uuid4(), primary_key=True)
     model_config = ConfigDict(extra="forbid")
 
     def update(self, other: "ModelType", overwrite_priority: Literal["self", "other"] | None = None) -> bool:

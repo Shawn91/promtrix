@@ -199,7 +199,7 @@ async def load_dataset() -> DatasetModel:
         raw_dataset_dir=str(subdataset_dir),
         name="high_school_mathematics",
     )
-    with repository_manager.transaction() as session:
+    async with repository_manager.transaction() as session:
         cmmlu_dataset, cmmlu_dataset_created = await repository_manager.save(model=cmmlu_dataset, session=session)
         subdataset, subdataset_created = await repository_manager.save(model=subdataset, session=session)
         subdataset_dev, subdataset_dev_created = await repository_manager.save(model=subdataset_dev, session=session)
@@ -305,7 +305,7 @@ Just answer "Correct" or "Incorrect" without any explanations.
         llm_service: LLMServiceModel,
         llm_params: LLMParametersModel,
     ):
-        with repository_manager.transaction() as session:
+        async with repository_manager.transaction() as session:
             # todo: how to prevent duplicate evaluations
             for response in llm_interaction.llm_responses:
                 # evaluation = await evaluation_repository.find_by_llm_response(llm_response=response)
@@ -358,7 +358,7 @@ Just answer "Correct" or "Incorrect" without any explanations.
     ) -> EvaluationGroupModel:
         evaluation_group = EvaluationGroupModel(
             name=group_name,
-            llm_interaction_group=llm_interaction_group,
+            llm_interaction_group_id=llm_interaction_group.id,
         )
         await repository_manager.save(evaluation_group)
 
@@ -401,7 +401,7 @@ async def run_llm_interaction(llm_interaction: LLMInteractionModel) -> LLMIntera
     """
     prompt = llm_interaction.prompt
     llm_service = llm_interaction.llm_service
-    llm_params = llm_interaction.llm_parameters
+    llm_params = llm_interaction.llm_params
     messages = []
     if prompt.system:
         messages.append({"role": "system", "content": prompt.system})
@@ -484,6 +484,7 @@ async def execute_task(
             else:
                 await run_llm_interaction(llm_interaction)
             break
+        break
     # Process any remaining interactions
     if pending_interactions:
         await asyncio.gather(*[run_llm_interaction(interaction) for interaction in pending_interactions])

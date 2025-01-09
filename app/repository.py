@@ -83,7 +83,6 @@ class RepositoryManager:
         async with AsyncSession(self.engine) as session:
             try:
                 yield session
-                await session.commit()
             except Exception:
                 await session.rollback()
                 raise
@@ -107,17 +106,25 @@ class RepositoryManager:
         if session:
             return await repository.get(model=model, session=session)
         else:
-            with self.transaction() as session:
+            async with self.transaction() as session:
                 return await repository.get(model=model, session=session)
 
     async def save(self, model: ModelType, session: Optional[AsyncSession] = None) -> Tuple[ModelType, bool]:
         """Save a model using its appropriate repository"""
         repository = self.get_repository(type(model))
         if session:
-            return await repository.save(model=model, session=session)
+            result = await repository.save(model=model, session=session)
+            if result[1]:
+                await session.commit()
+                await session.refresh(model)
+            return result
         else:
-            with self.transaction() as session:
-                return await repository.save(model=model, session=session)
+            async with self.transaction() as session:
+                result = await repository.save(model=model, session=session)
+                if result[1]:
+                    await session.commit()
+                    await session.refresh(model)
+                return result
 
     async def save_many(
         self, models: Iterable[ModelType], session: Optional[AsyncSession] = None
@@ -126,16 +133,19 @@ class RepositoryManager:
         assert all(isinstance(model, type(models[0])) for model in models)
         repository = self.get_repository(type(models[0]))
         if session:
-            return await repository.save_many(models=models, session=session)
+            result = await repository.save_many(models=models, session=session)
+            await session.commit()
+            await asyncio.gather(
+                *[session.refresh(model) for model, single_result in zip(models, result) if single_result[1]]
+            )
+            return result
         async with self.transaction() as session:
-            return await repository.save_many(models=models, session=session)
-
-    async def refresh(self, model: ModelType, session: AsyncSession | None = None):
-        if session:
-            await session.refresh(model)
-        else:
-            with self.transaction() as session:
-                await self.refresh(model=model, session=session)
+            result = await repository.save_many(models=models, session=session)
+            await session.commit()
+            await asyncio.gather(
+                *[session.refresh(model) for model, single_result in zip(models, result) if single_result[1]]
+            )
+            return result
 
 
 class Repository:
@@ -148,7 +158,7 @@ class Repository:
         db_model = None
         if model.id:
             db_model = await session.get(type(model), model.id)
-        else:
+        if not db_model:
             stmt = self.check_existence_statement(model)
             if stmt is not None:
                 result = await session.execute(stmt)
@@ -159,6 +169,7 @@ class Repository:
             try:
                 db_model = await session.merge(model)
                 await session.flush()
+                await session.commit()
             except SQLAlchemyError as e:
                 logger.error(f"Database error while updating model of type {type(model)}: {e}")
                 raise
@@ -177,7 +188,6 @@ class Repository:
         else:
             try:
                 session.add(model)
-                await session.flush()
                 return model, True
             except SQLAlchemyError as e:
                 logger.error(f"Database error while saving new model of type {type(model)}: {e}")
